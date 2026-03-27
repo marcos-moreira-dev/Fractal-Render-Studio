@@ -9,6 +9,25 @@ import com.marcos.fractalstudio.domain.validation.ProjectRenderabilityValidator;
 import java.util.List;
 import java.util.Objects;
 
+/**
+ * Aggregate root that represents the full state of a fractal exploration project.
+ *
+ * <p>The project concentrates the mathematical model that the user is editing:
+ *
+ * <ul>
+ *   <li>the fractal formula to evaluate</li>
+ *   <li>the visual color profile</li>
+ *   <li>the render profile and quality defaults</li>
+ *   <li>the timeline used to derive animation frames</li>
+ *   <li>the reusable saved points exposed as bookmarks</li>
+ *   <li>metadata and user-facing project settings</li>
+ * </ul>
+ *
+ * <p>The aggregate is intentionally immutable. Any meaningful change produces a
+ * new {@code Project} instance so that callers can reason about state updates
+ * explicitly and the application layer can coordinate persistence, preview
+ * invalidation and timeline regeneration without hidden mutation.
+ */
 public final class Project {
 
     private final ProjectId id;
@@ -21,6 +40,14 @@ public final class Project {
     private final ProjectSettings settings;
     private final List<ProjectBookmark> bookmarks;
 
+    /**
+     * Creates a fully-specified project aggregate.
+     *
+     * <p>The constructor is strict on nullability because a partially-built
+     * project would immediately complicate renderability checks and persistence
+     * mapping. Collections are defensively copied to preserve immutability at
+     * the aggregate boundary.
+     */
     public Project(
             ProjectId id,
             ProjectName name,
@@ -47,6 +74,14 @@ public final class Project {
         return new Project(id, newName, fractalFormula, timeline, renderProfile, colorProfile, metadata.touch(), settings, bookmarks);
     }
 
+    /**
+     * Returns a new aggregate with an updated fractal formula.
+     *
+     * <p>This operation keeps the current timeline and saved points intact on
+     * purpose: changing the formula should preserve the camera journey while
+     * forcing the renderer to reinterpret the same mathematical region with a
+     * different escape-time function.
+     */
     public Project withFractalFormula(FractalFormula newFractalFormula) {
         return new Project(id, name, newFractalFormula, timeline, renderProfile, colorProfile, metadata.touch(), settings, bookmarks);
     }
@@ -75,10 +110,25 @@ public final class Project {
         return new Project(id, name, fractalFormula, timeline, renderProfile, colorProfile, metadata.touch(), settings, newBookmarks);
     }
 
+    /**
+     * Validates whether the project contains the minimum coherent information
+     * required to produce a render plan.
+     *
+     * <p>The actual rules live in {@link ProjectRenderabilityValidator} so that
+     * validation remains testable and reusable outside the aggregate itself.
+     *
+     * @throws IllegalStateException when the project cannot be rendered safely
+     */
     public void validateRenderability() {
         new ProjectRenderabilityValidator().validate(this);
     }
 
+    /**
+     * Convenience predicate used by the application and presentation layers to
+     * query renderability without handling exceptions directly.
+     *
+     * @return {@code true} when the project passes all renderability checks
+     */
     public boolean isRenderable() {
         try {
             validateRenderability();

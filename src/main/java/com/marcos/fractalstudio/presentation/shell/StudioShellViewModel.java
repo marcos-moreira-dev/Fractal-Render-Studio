@@ -68,7 +68,22 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Presentation-facing state holder for the desktop shell.
- * It coordinates project persistence, preview requests, render jobs and derived labels.
+ *
+ * <p>This view model is the main bridge between the JavaFX client and the
+ * application layer. It coordinates:
+ *
+ * <ul>
+ *   <li>the current project aggregate and camera state</li>
+ *   <li>preview requests, refinement and deep-zoom advisories</li>
+ *   <li>render submission and render queue projection</li>
+ *   <li>derived labels shown by the inspector and sidebar</li>
+ *   <li>the synchronization rule that keeps saved points and timeline entries aligned</li>
+ *   <li>ephemeral session cleanup so internal state does not leak across launches</li>
+ * </ul>
+ *
+ * <p>Although it is presentation-oriented, the class deliberately keeps the UI
+ * free from persistence, rendering and export details by delegating heavy work
+ * to facades and specialized collaborators.
  */
 public final class StudioShellViewModel {
 
@@ -172,7 +187,11 @@ public final class StudioShellViewModel {
     }
 
     /**
-     * Replaces the current project with a new empty project and persists it immediately.
+     * Replaces the current project with a new empty in-memory project.
+     *
+     * <p>The desktop session is intentionally ephemeral, so creating a new
+     * project resets the visible state without silently restoring previous
+     * internal workspaces.
      */
     public void createNewProject() {
         createNewProject(true);
@@ -196,6 +215,9 @@ public final class StudioShellViewModel {
 
     /**
      * Discards in-memory session state and removes internal runtime artifacts.
+     *
+     * <p>This method is invoked during shutdown so the application behaves like
+     * a clean studio session instead of an autosaving scratchpad.
      */
     public void shutdownSession() {
         previewRefreshDebounce.stop();
@@ -216,6 +238,9 @@ public final class StudioShellViewModel {
      * Captures the current camera as a reusable point and keeps the sidebar and
      * animation timeline in sync by creating both the saved point and its
      * timeline counterpart with the same label.
+     *
+     * <p>This is the place where the product decision "points and timeline
+     * entries should behave as one concept" is enforced operationally.
      */
     public void addPoint() {
         String pointLabel = nextPointLabel();
@@ -232,6 +257,9 @@ public final class StudioShellViewModel {
 
     /**
      * Captures the current camera state as a timeline point.
+     *
+     * <p>The method delegates to {@link #addPoint()} because the product treats
+     * both names as a single user concept.
      */
     public void addKeyframe() {
         addPoint();
@@ -374,6 +402,13 @@ public final class StudioShellViewModel {
         appendMetric("Punto agregado al timeline");
     }
 
+    /**
+     * Submits a render using the current project defaults for duration, FPS,
+     * output workspace and preset.
+     *
+     * <p>This convenience entry point is what the shell uses when the user wants
+     * a straightforward render flow without manually overriding every parameter.
+     */
     public void submitRender() {
         double durationSeconds = currentSuggestedRenderDurationSeconds();
         submitRender(
@@ -1328,6 +1363,13 @@ public final class StudioShellViewModel {
         return Math.max(min, Math.min(max, value));
     }
 
+    /**
+     * Estimates how many discrete frames are required for a given animation
+     * duration and frame rate.
+     *
+     * <p>The calculation keeps at least one frame and adds the terminal frame so
+     * that the end state of the camera path is not dropped by rounding.
+     */
     public int estimateRenderFrameCount(double durationSeconds, double framesPerSecond) {
         return Math.max(1, (int) Math.ceil(durationSeconds * framesPerSecond) + 1);
     }

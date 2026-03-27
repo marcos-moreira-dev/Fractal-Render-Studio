@@ -13,7 +13,12 @@ import java.io.IOException;
 import java.nio.file.Path;
 
 /**
- * Stable application boundary for project-centric operations used by the UI layer.
+ * Stable application boundary for project editing workflows.
+ *
+ * <p>This facade groups the operations that mutate or persist the project aggregate: naming the
+ * project, editing metadata, changing inspector parameters, saving points, reshaping the timeline and
+ * serializing the result as a portable JSON snapshot. The UI talks to this boundary in terms of
+ * product actions instead of orchestrating individual use cases itself.
  */
 public final class ProjectFacade {
 
@@ -81,34 +86,64 @@ public final class ProjectFacade {
         return addKeyframeUseCase.add(project, cameraState);
     }
 
+    /**
+     * Renames a timeline point without changing its camera data.
+     */
     public Project renameKeyframe(Project project, String keyframeId, String newLabel) {
         return renameKeyframeUseCase.rename(project, keyframeId, newLabel);
     }
 
+    /**
+     * Removes a timeline point from the project aggregate.
+     */
     public Project deleteKeyframe(Project project, String keyframeId) {
         return deleteKeyframeUseCase.delete(project, keyframeId);
     }
 
+    /**
+     * Stores the current camera as a reusable point in the project.
+     *
+     * <p>Even when the UI uses lighter language such as "guardar punto", the persisted concept is still
+     * a structured camera bookmark that can feed the animation timeline later.
+     */
     public Project addBookmark(Project project, CameraState cameraState) {
         return addBookmarkUseCase.add(project, cameraState);
     }
 
+    /**
+     * Deletes a stored point/bookmark from the project.
+     */
     public Project deleteBookmark(Project project, String bookmarkId) {
         return deleteBookmarkUseCase.delete(project, bookmarkId);
     }
 
+    /**
+     * Renames a stored point/bookmark for clearer navigation.
+     */
     public Project renameBookmark(Project project, String bookmarkId, String newLabel) {
         return renameBookmarkUseCase.rename(project, bookmarkId, newLabel);
     }
 
+    /**
+     * Reorders a point/bookmark inside the project-defined path.
+     */
     public Project moveBookmark(Project project, String bookmarkId, int direction) {
         return moveBookmarkUseCase.move(project, bookmarkId, direction);
     }
 
+    /**
+     * Promotes a stored point into an explicit timeline point.
+     *
+     * <p>This keeps the two concepts interoperable even when the UI chooses to present them with
+     * simplified language.
+     */
     public Project createKeyframeFromBookmark(Project project, String bookmarkId) {
         return createKeyframeFromBookmarkUseCase.create(project, bookmarkId);
     }
 
+    /**
+     * Applies the editable inspector controls to the project render model.
+     */
     public Project updateInspector(
             Project project,
             FractalFormulaType fractalFormulaType,
@@ -123,6 +158,9 @@ public final class ProjectFacade {
         return renameProjectUseCase.rename(project, newProjectName);
     }
 
+    /**
+     * Replaces the human-readable project description shown in dialogs and side panels.
+     */
     public Project updateProjectDescription(Project project, String description) {
         return updateProjectMetadataUseCase.updateDescription(project, description);
     }

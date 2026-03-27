@@ -28,8 +28,22 @@ import com.marcos.fractalstudio.domain.timeline.Timeline;
 
 import java.time.Instant;
 
+/**
+ * Maps between the domain project aggregate and its JSON persistence snapshot.
+ *
+ * <p>The mapper protects the domain from serialization concerns and keeps file
+ * format evolution localized. It also handles compatibility defaults for older
+ * project documents that may lack newer metadata or settings fields.
+ */
 public final class ProjectSnapshotMapper {
 
+    /**
+     * Converts a domain project aggregate into its serializable document form.
+     *
+     * <p>The resulting document is designed to preserve the mathematical state
+     * of the project rather than only its visual result. This is what allows a
+     * saved project to be reopened and re-rendered at different qualities later.
+     */
     public ProjectDocument toDocument(Project project) {
         return new ProjectDocument(
                 project.id().value(),
@@ -87,6 +101,13 @@ public final class ProjectSnapshotMapper {
         );
     }
 
+    /**
+     * Rebuilds a domain project aggregate from a persisted snapshot.
+     *
+     * <p>When fields are missing because the file originates from an earlier
+     * version of the product, the mapper supplies explicit defaults instead of
+     * failing silently.
+     */
     public Project toDomain(ProjectDocument projectDocument) {
         Timeline timeline = new Timeline(projectDocument.keyframes().stream()
                 .map(keyframe -> new Keyframe(

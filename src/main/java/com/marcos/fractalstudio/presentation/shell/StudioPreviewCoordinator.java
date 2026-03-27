@@ -13,7 +13,18 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 /**
- * Serializes preview requests so the JavaFX shell only applies the latest relevant frame.
+ * Serializes preview requests produced by viewport interaction.
+ *
+ * <p>The explorer can emit many camera changes in a short interval: window resize, drag, wheel zoom,
+ * jump-to-point actions, preset changes and inspector edits all compete to refresh the same viewport.
+ * This coordinator enforces a simple rule for the JavaFX layer: keep at most one preview running, keep
+ * at most one preview pending, and only apply the latest request that is still relevant when the frame
+ * reaches the UI thread.
+ *
+ * <p>Conceptually this is the shell-side scheduler that sits above the tile workers. The actual render
+ * engine still splits the viewport into sectors/baldosas and distributes them across background workers,
+ * but the shell should behave as if there were a single coherent preview pipeline instead of a storm of
+ * overlapping frames fighting for the same {@code ImageView}.
  */
 final class StudioPreviewCoordinator {
 
@@ -42,6 +53,12 @@ final class StudioPreviewCoordinator {
         this.frameConsumer = frameConsumer;
     }
 
+    /**
+     * Clears coordinator state after a project/session reset.
+     *
+     * <p>This intentionally cancels the active preview and forgets deduplication history so the next
+     * request starts from a clean generation.
+     */
     void invalidate() {
         generation.incrementAndGet();
         renderFacade.cancelActivePreview();
@@ -51,6 +68,13 @@ final class StudioPreviewCoordinator {
         lastCompletedRequestState = null;
     }
 
+    /**
+     * Schedules a preview request derived from the current project, camera and preview-quality plan.
+     *
+     * <p>Requests are deduplicated by an approximate viewport fingerprint. If a preview is already
+     * running, the new request replaces the pending slot and the active render is cancelled so the
+     * engine can pivot toward the latest camera state.
+     */
     void request(
             Project project,
             CameraState cameraState,

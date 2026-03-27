@@ -13,8 +13,32 @@ import com.marcos.fractalstudio.application.render.RenderPresetProfiles;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Derives the full ordered sequence of frame descriptors that a render job must
+ * process for a given project, duration and frame rate.
+ *
+ * <p>This use case is where the product-level idea of "points become an
+ * animation" is turned into a concrete list of per-frame mathematical states.
+ * It can resolve camera motion from:
+ *
+ * <ul>
+ *   <li>a timeline with two or more keyframes</li>
+ *   <li>a fallback bookmark path when there is no rich timeline yet</li>
+ *   <li>a single static point or keyframe when the output should remain fixed</li>
+ * </ul>
+ */
 public final class BuildTimelineSequenceUseCase {
 
+    /**
+     * Builds the frame-by-frame render plan for the requested animation.
+     *
+     * @param project project aggregate that contributes formula, color and path
+     * @param fallbackCamera camera used when the project has no usable path
+     * @param totalFrames number of frames expected in the final output
+     * @param framesPerSecond temporal sampling rate of the output video
+     * @param renderPreset preset to apply on top of the project's base profile
+     * @return ordered frame descriptors ready for rendering infrastructure
+     */
     public List<FrameDescriptor> build(
             Project project,
             CameraState fallbackCamera,
@@ -41,6 +65,18 @@ public final class BuildTimelineSequenceUseCase {
         return frameDescriptors;
     }
 
+    /**
+     * Resolves which camera state should be used for a specific time position.
+     *
+     * <p>The order of precedence is intentional:
+     *
+     * <ol>
+     *   <li>rich timeline interpolation when the project has at least two keyframes</li>
+     *   <li>bookmark interpolation when the user only saved points</li>
+     *   <li>a single keyframe or bookmark as static output</li>
+     *   <li>the supplied fallback camera</li>
+     * </ol>
+     */
     private CameraState resolveCamera(
             Project project,
             CameraState fallbackCamera,
@@ -62,6 +98,14 @@ public final class BuildTimelineSequenceUseCase {
         return fallbackCamera;
     }
 
+    /**
+     * Interpolates camera motion across saved project bookmarks.
+     *
+     * <p>This path keeps the software useful even when the user has not built a
+     * dedicated timeline yet. In practice, it lets saved points behave as a
+     * lightweight animation path and prevents the render pipeline from
+     * degenerating into a single repeated frame.
+     */
     private CameraState resolveBookmarkCamera(List<ProjectBookmark> bookmarks, double seconds, double totalDurationSeconds) {
         if (bookmarks.size() == 1 || totalDurationSeconds <= 0.0) {
             return bookmarks.getFirst().cameraState();

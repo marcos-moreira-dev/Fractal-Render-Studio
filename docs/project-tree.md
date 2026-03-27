@@ -4,10 +4,19 @@
 .
 |-- docs/
 |   |-- documentation-map.md
+|   |-- computing-concepts-glossary.md
+|   |-- software-product-computing-foundations.md
+|   |-- code-guided-theory-index.md
 |   |-- software-engineering-and-design-patterns.md
 |   |-- data-structures-algorithms-and-complexity.md
 |   |-- computation-theory-and-fractal-science.md
 |   |-- numerical-precision-and-rendering-model.md
+|   |-- desktop-ui-state-and-mvvm.md
+|   |-- concurrency-cancellation-and-parallel-rendering.md
+|   |-- agent-based-rendering-model.md
+|   |-- persistence-json-and-project-lifecycle.md
+|   |-- testing-quality-and-verification.md
+|   |-- video-pipeline-and-media-encoding.md
 |   |-- implementation-architecture.md
 |   |-- javafx_00.md ... javafx_07.md
 |   `-- project-tree.md

@@ -4,8 +4,13 @@ import com.marcos.fractalstudio.infrastructure.rendering.AdaptiveEscapeBudget;
 import com.marcos.fractalstudio.domain.render.Resolution;
 
 /**
- * Chooses an interactive preview resolution based on zoom depth.
- * Manual preview requests stay at full viewport resolution, while auto-preview can downscale.
+ * Chooses the execution strategy for preview rendering based on interaction
+ * intent, viewport size and current zoom depth.
+ *
+ * <p>The policy exists to protect responsiveness. A preview that is visually
+ * useful but cheap to compute is often better for interaction than an exact
+ * preview that arrives too late to help navigation. Manual refinement requests
+ * can still demand full resolution and higher fidelity.
  */
 public final class AdaptivePreviewQualityPolicy {
 
@@ -47,6 +52,13 @@ public final class AdaptivePreviewQualityPolicy {
         );
     }
 
+    /**
+     * Computes the downscale factor applied to automatic previews.
+     *
+     * <p>The thresholds encode a practical latency policy: as zoom and viewport
+     * cost grow, the system sacrifices preview density before sacrificing
+     * interactivity altogether.
+     */
     private static double scaleFor(double zoom, double viewportArea) {
         double zoomScale;
         if (zoom >= 1_000_000_000d) {
@@ -72,6 +84,13 @@ public final class AdaptivePreviewQualityPolicy {
         return zoomScale;
     }
 
+    /**
+     * Caps iteration count for fast interaction mode.
+     *
+     * <p>This method intentionally keeps a floor so previews do not collapse
+     * into uselessly coarse images, while still preventing deep zoom from
+     * monopolizing the preview executor.
+     */
     private static int fastIterations(double zoom, int preciseIterations) {
         int targetCap;
         if (zoom >= 1_000_000_000d) {
@@ -109,14 +128,19 @@ public final class AdaptivePreviewQualityPolicy {
             boolean highPrecisionEnabled
     ) {
         /**
-         * @return short UI label for overlay and inspector status
+         * Returns a compact status label suitable for overlays and inspector
+         * panels.
          */
         public String statusLabel() {
             return modeLabel + " " + Math.round(scale * 100.0) + "%";
         }
 
         /**
-         * @return render-profile name used internally by the preview pipeline
+         * Returns the internal render-profile name used by the preview pipeline.
+         *
+         * <p>This name is not just decorative. It makes logs, metrics and
+         * debugging output more explicit about which kind of preview path is
+         * executing.
          */
         public String profileName() {
             if (precise) {

@@ -22,6 +22,22 @@ import java.util.List;
 public final class Mp4SequenceVideoExporter implements SequenceVideoExporter {
 
     @Override
+    /**
+     * Encodes a directory of sequential PNG frames into a Windows-compatible
+     * MP4 file.
+     *
+     * <p>The exporter expects the source directory to contain files named like
+     * {@code frame_000001.png}. It preserves frame ordering lexicographically,
+     * normalizes odd dimensions to even values required by common H.264
+     * pipelines and writes a single MP4 artifact suitable for the desktop
+     * workflow of the application.
+     *
+     * @param sourceDirectory directory containing temporary PNG frames
+     * @param destinationVideo target MP4 file to create or replace
+     * @param framesPerSecond playback frame rate for the output video
+     * @return the written video path for chaining by callers
+     * @throws IOException when no frames exist or FFmpeg encoding fails
+     */
     public Path exportVideo(Path sourceDirectory, Path destinationVideo, double framesPerSecond) throws IOException {
         Files.createDirectories(destinationVideo.getParent());
         List<Path> frameFiles = Files.list(sourceDirectory)
@@ -67,6 +83,11 @@ public final class Mp4SequenceVideoExporter implements SequenceVideoExporter {
         return destinationVideo;
     }
 
+    /**
+     * Loads a PNG frame from disk and fails fast when the image cannot be
+     * decoded, keeping the render pipeline explicit about corrupt or missing
+     * intermediate artifacts.
+     */
     private BufferedImage readFrame(Path frameFile) throws IOException {
         BufferedImage image = ImageIO.read(frameFile.toFile());
         if (image == null) {
@@ -75,6 +96,10 @@ public final class Mp4SequenceVideoExporter implements SequenceVideoExporter {
         return image;
     }
 
+    /**
+     * Converts source frames to a consistent even-sized BGR image expected by
+     * the recorder, resizing only when necessary.
+     */
     private BufferedImage normalizeFrame(BufferedImage source, int width, int height) {
         if (source.getWidth() == width && source.getHeight() == height && source.getType() == BufferedImage.TYPE_3BYTE_BGR) {
             return source;
@@ -87,6 +112,11 @@ public final class Mp4SequenceVideoExporter implements SequenceVideoExporter {
         return converted;
     }
 
+    /**
+     * H.264 pipelines often require even dimensions because of chroma
+     * subsampling. The exporter therefore rounds odd values up to the next even
+     * number before initializing the recorder.
+     */
     private int ensureEven(int value) {
         return value % 2 == 0 ? value : value + 1;
     }

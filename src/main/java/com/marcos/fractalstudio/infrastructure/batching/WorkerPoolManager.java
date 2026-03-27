@@ -16,6 +16,24 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Consumer;
 
+/**
+ * Runtime gateway that executes render plans as observable background jobs.
+ *
+ * <p>The class translates a high-level {@link RenderPlan} into the operational
+ * pipeline used by the desktop product:
+ *
+ * <ol>
+ *   <li>register a render job in the in-memory queue</li>
+ *   <li>render each frame using the renderer strategy selected by quality</li>
+ *   <li>export PNG frames into the job workspace</li>
+ *   <li>encode the final MP4 from those intermediate frames</li>
+ *   <li>publish progress and terminal state back to the UI</li>
+ * </ol>
+ *
+ * <p>Even though the user-facing narrative may describe this as "agents"
+ * working on the render, this class is the concrete orchestrator that schedules
+ * and supervises that work on the configured executor service.
+ */
 public final class WorkerPoolManager implements RenderJobGateway {
 
     private final FrameRendererFactory frameRendererFactory;
@@ -25,6 +43,16 @@ public final class WorkerPoolManager implements RenderJobGateway {
     private final InMemoryRenderQueue inMemoryRenderQueue;
     private final BatchMetricsCollector batchMetricsCollector;
 
+    /**
+     * Creates the render job manager used by the application layer.
+     *
+     * @param frameRendererFactory selects the appropriate renderer implementation
+     * @param frameSequenceExporter persists temporary frame images
+     * @param sequenceVideoExporter turns the frame sequence into the final video
+     * @param renderExecutorService executor used for long-running render jobs
+     * @param inMemoryRenderQueue observable queue of active and finished jobs
+     * @param batchMetricsCollector measures elapsed render duration
+     */
     public WorkerPoolManager(
             FrameRendererFactory frameRendererFactory,
             FrameSequenceExporter frameSequenceExporter,
@@ -42,6 +70,14 @@ public final class WorkerPoolManager implements RenderJobGateway {
     }
 
     @Override
+    /**
+     * Submits a render plan as an asynchronous job and reports progress through
+     * the provided consumer.
+     *
+     * <p>The submission is intentionally non-blocking for the caller. The
+     * actual work happens on the render executor so that JavaFX remains
+     * responsive while frames are generated and the MP4 is encoded.
+     */
     public void submit(RenderPlan renderPlan, Consumer<RenderJobStatusDto> statusConsumer) {
         JobCancellationToken cancellationToken = new JobCancellationToken();
         RenderJob renderJob = new RenderJob(
@@ -119,6 +155,15 @@ public final class WorkerPoolManager implements RenderJobGateway {
     }
 
     @Override
+    /**
+     * Requests cooperative cancellation of an existing render job.
+     *
+     * <p>Cancellation does not interrupt threads forcibly. Instead, the token is
+     * marked and rendering code is expected to stop at safe checkpoints.
+     *
+     * @return {@code true} when the cancellation request was accepted for a
+     * running job, {@code false} otherwise
+     */
     public boolean cancel(String jobId, Consumer<RenderJobStatusDto> statusConsumer) {
         RenderJob renderJob = inMemoryRenderQueue.find(jobId);
         if (renderJob == null) {
@@ -135,6 +180,9 @@ public final class WorkerPoolManager implements RenderJobGateway {
     }
 
     @Override
+    /**
+     * Returns a snapshot view of all known render jobs in queue order.
+     */
     public List<RenderJobStatusDto> listStatuses() {
         return inMemoryRenderQueue.jobs().stream()
                 .map(this::toStatusDto)

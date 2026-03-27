@@ -24,7 +24,13 @@ import javafx.scene.shape.Rectangle;
 import javafx.util.Duration;
 
 /**
- * Interactive fractal canvas with pan, zoom and transient zoom-target feedback.
+ * Interactive viewport for exploring the fractal scene.
+ *
+ * <p>This view is the main bridge between direct manipulation and the rendering pipeline. It translates
+ * mouse and keyboard gestures into camera commands, keeps the preview image centered without allowing it
+ * to drive the window layout, and provides transient feedback such as the zoom target marker and the
+ * drawer scrim. In product terms, this is the "canvas" where the user explores, stores points and asks
+ * the renderer for a refined frame.
  */
 public final class FractalExplorerView extends StackPane {
 
@@ -37,6 +43,10 @@ public final class FractalExplorerView extends StackPane {
 
     /**
      * Creates the explorer surface bound to the shared shell view model.
+     *
+     * <p>The view intentionally depends on high-level session commands instead of touching rendering
+     * services directly, which keeps gesture interpretation inside the presentation layer while the
+     * actual render work remains in the application/infrastructure layers.
      *
      * @param viewModel shell state and commands backing the explorer
      */
@@ -266,6 +276,13 @@ public final class FractalExplorerView extends StackPane {
         panelToggleButton.getStyleClass().remove("explorer-action-button-active");
     }
 
+    /**
+     * Requests the first automatic preview only after the viewport has a usable size and the window is
+     * already visible.
+     *
+     * <p>This avoids the common JavaFX failure mode where a preview is rendered against transient layout
+     * measurements and then appears to "grow" or fight with the initial scene arrangement.
+     */
     private void installStartupPreview(StudioShellViewModel viewModel) {
         PauseTransition startupPreviewDelay = new PauseTransition(Duration.millis(480));
         startupPreviewDelay.setOnFinished(event -> {
@@ -310,6 +327,9 @@ public final class FractalExplorerView extends StackPane {
                 && getScene().getWindow().isShowing();
     }
 
+    /**
+     * Shows or refreshes the zoom target indicator at the center of the viewport.
+     */
     private void keepZoomTargetVisible(
             StackPane zoomTarget,
             Circle zoomTargetRing,
@@ -329,6 +349,9 @@ public final class FractalExplorerView extends StackPane {
         );
     }
 
+    /**
+     * Shows or refreshes the zoom target indicator at a concrete viewport anchor.
+     */
     private void keepZoomTargetVisible(
             StackPane zoomTarget,
             Circle zoomTargetRing,
@@ -350,6 +373,10 @@ public final class FractalExplorerView extends StackPane {
         );
     }
 
+    /**
+     * Shows or refreshes the zoom target indicator and switches it to a blocked style when the zoom
+     * limit has been reached.
+     */
     private void keepZoomTargetVisible(
             StackPane zoomTarget,
             Circle zoomTargetRing,
@@ -390,6 +417,12 @@ public final class FractalExplorerView extends StackPane {
         zoomTarget.setTranslateY(boundedY - (getHeight() / 2.0));
     }
 
+    /**
+     * Maps keyboard shortcuts to explorer navigation commands.
+     *
+     * <p>The shortcuts deliberately mirror the most frequent viewport actions so the explorer can be
+     * used as a desktop creative tool and not only as a mouse-driven demo surface.
+     */
     private void handleKeyboardShortcut(KeyEvent event, StudioShellViewModel viewModel) {
         if (event.getCode() == KeyCode.ADD || event.getCode() == KeyCode.PLUS || event.getCode() == KeyCode.EQUALS) {
             viewModel.zoomIn();
