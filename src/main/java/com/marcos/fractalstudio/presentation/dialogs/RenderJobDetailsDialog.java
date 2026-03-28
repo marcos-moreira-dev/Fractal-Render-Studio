@@ -8,8 +8,21 @@ import javafx.scene.control.Label;
 import javafx.scene.layout.GridPane;
 import javafx.stage.Window;
 
+/**
+ * Shows a compact read-only summary for a render job selected in the queue.
+ *
+ * <p>The dialog is intentionally informational and mirrors the observable
+ * status row with a little more context, without mixing command actions into
+ * the diagnostic surface.
+ */
 public final class RenderJobDetailsDialog {
 
+    /**
+     * Displays render job details using the shared desktop dialog theme.
+     *
+     * @param owner owner window for modality
+     * @param renderJobRow selected render row
+     */
     public void show(Window owner, RenderJobRow renderJobRow) {
         Alert alert = new Alert(Alert.AlertType.INFORMATION);
         alert.setTitle("Render Job Details");
@@ -26,7 +39,10 @@ public final class RenderJobDetailsDialog {
         gridPane.addRow(1, new Label("Nombre"), new Label(renderJobRow.jobName()));
         gridPane.addRow(2, new Label("Estado"), new Label(renderJobRow.state()));
         gridPane.addRow(3, new Label("Progreso"), new Label(String.format("%.2f%%", renderJobRow.progress() * 100.0)));
-        gridPane.addRow(4, new Label("Mensaje"), new Label(renderJobRow.message()));
+        Label messageLabel = new Label(renderJobRow.message());
+        messageLabel.setWrapText(true);
+        messageLabel.setMaxWidth(420.0);
+        gridPane.addRow(4, new Label("Mensaje"), messageLabel);
 
         alert.getDialogPane().setContent(gridPane);
         alert.showAndWait();

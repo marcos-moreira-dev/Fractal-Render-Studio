@@ -17,13 +17,17 @@ import javafx.stage.Stage;
 public final class StudioStageConfigurator {
 
     /**
-     * Configures the primary stage and makes it visible.
+     * Configures the primary stage without showing it yet.
+     *
+     * <p>This split allows the splash screen to remain the only visible window
+     * during startup and lets the caller decide exactly when the main desktop
+     * shell should become visible.
      *
      * @param stage primary JavaFX stage
      * @param root application root node
      * @param appProperties runtime settings that define title and initial dimensions
      */
-    public void configureAndShow(Stage stage, Parent root, AppProperties appProperties) {
+    public void configure(Stage stage, Parent root, AppProperties appProperties) {
         Rectangle2D visualBounds = Screen.getPrimary().getVisualBounds();
         double initialWidth = Math.min(appProperties.initialWidth(), visualBounds.getWidth() * 0.92);
         double initialHeight = Math.min(appProperties.initialHeight(), visualBounds.getHeight() * 0.90);
@@ -39,6 +43,14 @@ public final class StudioStageConfigurator {
         stage.setHeight(initialHeight);
         stage.setX(visualBounds.getMinX() + ((visualBounds.getWidth() - initialWidth) / 2.0));
         stage.setY(visualBounds.getMinY() + ((visualBounds.getHeight() - initialHeight) / 2.0));
+    }
+
+    /**
+     * Shows an already configured primary stage.
+     *
+     * @param stage primary JavaFX stage
+     */
+    public void show(Stage stage) {
         stage.show();
     }
 }

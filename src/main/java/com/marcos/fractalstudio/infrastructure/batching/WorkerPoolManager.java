@@ -10,9 +10,12 @@ import com.marcos.fractalstudio.infrastructure.export.FrameSequenceExporter;
 import com.marcos.fractalstudio.infrastructure.export.SequenceVideoExporter;
 import com.marcos.fractalstudio.infrastructure.metrics.BatchMetricsCollector;
 import com.marcos.fractalstudio.infrastructure.rendering.FrameRendererFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Consumer;
 
@@ -35,6 +38,8 @@ import java.util.function.Consumer;
  * and supervises that work on the configured executor service.
  */
 public final class WorkerPoolManager implements RenderJobGateway {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(WorkerPoolManager.class);
 
     private final FrameRendererFactory frameRendererFactory;
     private final FrameSequenceExporter frameSequenceExporter;
@@ -89,6 +94,11 @@ public final class WorkerPoolManager implements RenderJobGateway {
         );
         inMemoryRenderQueue.register(renderJob);
         int totalFrames = renderPlan.frameDescriptors().size();
+        LOGGER.info("Render job submitted: name='{}', frames={}, fps={}, output={}",
+                renderPlan.jobName(),
+                totalFrames,
+                renderPlan.framesPerSecond(),
+                renderPlan.outputDirectory().toAbsolutePath());
 
         statusConsumer.accept(toStatusDto(renderJob));
 
@@ -126,6 +136,7 @@ public final class WorkerPoolManager implements RenderJobGateway {
                 statusConsumer.accept(toStatusDto(renderJob));
                 Path videoPath = renderPlan.outputDirectory().resolve("render.mp4");
                 sequenceVideoExporter.exportVideo(framesDirectory, videoPath, renderPlan.framesPerSecond());
+                LOGGER.info("Render job {} encoded MP4 at {}", renderJob.id().value(), videoPath.toAbsolutePath());
 
                 renderJob.markCompleted("Video MP4 listo: " + videoPath.getFileName());
                 statusConsumer.accept(new RenderJobStatusDto(
@@ -138,7 +149,13 @@ public final class WorkerPoolManager implements RenderJobGateway {
                         "Video MP4 listo en " + batchMetricsCollector.measure(renderJob.startedAt(), renderJob.finishedAt()).toSeconds() + "s",
                         renderJob.outputDirectory().toString()
                 ));
+                LOGGER.info("Render job {} completed successfully", renderJob.id().value());
+            } catch (CancellationException cancellationException) {
+                LOGGER.info("Render job {} cancelled during execution", renderJob.id().value());
+                renderJob.markCancelled("Render cancelado por el usuario");
+                statusConsumer.accept(toStatusDto(renderJob));
             } catch (Exception exception) {
+                LOGGER.error("Render job {} failed", renderJob.id().value(), exception);
                 renderJob.markFailed(exception.getMessage());
                 statusConsumer.accept(new RenderJobStatusDto(
                         renderJob.id().value(),
@@ -167,6 +184,7 @@ public final class WorkerPoolManager implements RenderJobGateway {
     public boolean cancel(String jobId, Consumer<RenderJobStatusDto> statusConsumer) {
         RenderJob renderJob = inMemoryRenderQueue.find(jobId);
         if (renderJob == null) {
+            LOGGER.warn("Cancellation requested for unknown render job {}", jobId);
             return false;
         }
         if (renderJob.state() == JobState.COMPLETED || renderJob.state() == JobState.FAILED || renderJob.state() == JobState.CANCELLED) {
@@ -176,6 +194,7 @@ public final class WorkerPoolManager implements RenderJobGateway {
         renderJob.cancellationToken().cancel();
         renderJob.markCancellationRequested("Cancelacion solicitada");
         statusConsumer.accept(toStatusDto(renderJob));
+        LOGGER.info("Cancellation requested for render job {}", jobId);
         return true;
     }
 

@@ -2,8 +2,12 @@ package com.marcos.fractalstudio;
 
 import com.marcos.fractalstudio.presentation.app.ApplicationBootstrap;
 import com.marcos.fractalstudio.presentation.app.StudioStageConfigurator;
+import com.marcos.fractalstudio.presentation.app.StudioSplashScreen;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javafx.application.Application;
+import javafx.application.Platform;
 import javafx.scene.Parent;
 import javafx.stage.Stage;
 
@@ -17,18 +21,30 @@ import javafx.stage.Stage;
  */
 public final class FractalStudioApplication extends Application {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(FractalStudioApplication.class);
+
     private final ApplicationBootstrap applicationBootstrap = new ApplicationBootstrap();
     private final StudioStageConfigurator stageConfigurator = new StudioStageConfigurator();
 
     @Override
     public void start(Stage stage) {
-        Parent root = applicationBootstrap.build();
-        stageConfigurator.configureAndShow(stage, root, applicationBootstrap.appProperties());
+        LOGGER.info("Starting Fractal Render Studio");
+        StudioSplashScreen splashScreen = new StudioSplashScreen();
+        Platform.runLater(() -> {
+            Parent root = applicationBootstrap.build();
+            stageConfigurator.configure(stage, root, applicationBootstrap.appProperties());
+            splashScreen.closeWhenReady(() -> {
+                stageConfigurator.show(stage);
+                LOGGER.info("Fractal Render Studio started successfully");
+            });
+        });
     }
 
     @Override
     public void stop() {
+        LOGGER.info("Stopping Fractal Render Studio");
         applicationBootstrap.shutdown();
+        LOGGER.info("Fractal Render Studio stopped");
     }
 
     /**

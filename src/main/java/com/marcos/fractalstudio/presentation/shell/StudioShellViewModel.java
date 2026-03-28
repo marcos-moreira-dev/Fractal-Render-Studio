@@ -3,7 +3,6 @@ package com.marcos.fractalstudio.presentation.shell;
 import com.marcos.fractalstudio.application.dto.KeyframeDto;
 import com.marcos.fractalstudio.application.dto.RenderJobStatusDto;
 import com.marcos.fractalstudio.application.export.ExportFacade;
-import com.marcos.fractalstudio.application.export.ExportRequest;
 import com.marcos.fractalstudio.application.export.ExportResult;
 import com.marcos.fractalstudio.application.preview.AdaptivePreviewQualityPolicy;
 import com.marcos.fractalstudio.application.preview.DeepZoomAdvisor;
@@ -13,11 +12,11 @@ import com.marcos.fractalstudio.application.preview.RenderedFrame;
 import com.marcos.fractalstudio.application.preview.ZoomLimitPolicy;
 import com.marcos.fractalstudio.application.project.ProjectFacade;
 import com.marcos.fractalstudio.application.render.RenderFacade;
-import com.marcos.fractalstudio.application.render.RenderRequest;
 import com.marcos.fractalstudio.domain.camera.CameraState;
 import com.marcos.fractalstudio.domain.camera.FractalCoordinate;
 import com.marcos.fractalstudio.domain.camera.ZoomLevel;
 import com.marcos.fractalstudio.domain.color.ColorProfileFactory;
+import com.marcos.fractalstudio.domain.exceptions.DomainException;
 import com.marcos.fractalstudio.domain.fractal.FractalFormulaFactory;
 import com.marcos.fractalstudio.domain.fractal.FractalFormulaType;
 import com.marcos.fractalstudio.domain.project.Project;
@@ -25,8 +24,12 @@ import com.marcos.fractalstudio.domain.project.ProjectBookmark;
 import com.marcos.fractalstudio.domain.render.RenderPreset;
 import com.marcos.fractalstudio.infrastructure.rendering.AdaptiveEscapeBudget;
 import com.marcos.fractalstudio.presentation.common.UiThreadExecutor;
+import com.marcos.fractalstudio.presentation.common.UserNotification;
+import com.marcos.fractalstudio.presentation.common.UserNotificationLevel;
 import com.marcos.fractalstudio.presentation.renderqueue.RenderJobRow;
 import com.marcos.fractalstudio.presentation.timeline.KeyframeTimelineItem;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javafx.animation.PauseTransition;
 import javafx.beans.property.ObjectProperty;
@@ -81,6 +84,7 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class StudioShellViewModel {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(StudioShellViewModel.class);
     private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm:ss");
     private static final Duration INTERACTION_PREVIEW_DEBOUNCE = Duration.millis(220);
     private static final double VIEWPORT_RESIZE_EPSILON = 8.0;
@@ -91,9 +95,9 @@ public final class StudioShellViewModel {
 
     private final ProjectFacade projectFacade;
     private final RenderFacade renderFacade;
-    private final ExportFacade exportFacade;
     private final UiThreadExecutor uiThreadExecutor;
     private final StudioStoragePaths storagePaths;
+    private final StudioRenderWorkflowCoordinator renderWorkflowCoordinator;
     private final StudioPreviewCoordinator previewCoordinator;
     private final StudioPointsTimelineCoordinator pointsTimelineCoordinator = new StudioPointsTimelineCoordinator();
     private final StudioRenderQueueState renderQueueState = new StudioRenderQueueState();
@@ -112,6 +116,7 @@ public final class StudioShellViewModel {
     private final ObservableList<KeyframeDto> keyframes = FXCollections.observableArrayList();
     private final ObservableList<KeyframeTimelineItem> timelineItems = FXCollections.observableArrayList();
     private final ObjectProperty<DeepZoomAdvisory> pendingDeepZoomAdvisory = new SimpleObjectProperty<>();
+    private final ObjectProperty<UserNotification> pendingUserNotification = new SimpleObjectProperty<>();
 
     private double viewportWidth = 960.0;
     private double viewportHeight = 540.0;
@@ -134,9 +139,9 @@ public final class StudioShellViewModel {
     ) {
         this.projectFacade = projectFacade;
         this.renderFacade = renderFacade;
-        this.exportFacade = exportFacade;
         this.uiThreadExecutor = uiThreadExecutor;
         this.storagePaths = StudioStoragePaths.from(storageRoot);
+        this.renderWorkflowCoordinator = new StudioRenderWorkflowCoordinator(renderFacade, exportFacade, storagePaths);
         this.previewCoordinator = new StudioPreviewCoordinator(
                 renderFacade,
                 uiThreadExecutor,
@@ -185,6 +190,7 @@ public final class StudioShellViewModel {
         previewRefreshDebounce.stop();
         previewCoordinator.invalidate();
         pendingDeepZoomAdvisory.set(null);
+        pendingUserNotification.set(null);
         thumbnailGeneration.incrementAndGet();
         bookmarkThumbnailGeneration.incrementAndGet();
         previewImage.set(null);
@@ -496,9 +502,17 @@ public final class StudioShellViewModel {
             Files.createDirectories(projectPath.toAbsolutePath().getParent());
             projectFacade.saveProject(projectSessionState.currentProject(), projectPath);
             projectSessionState.setCurrentProjectFilePath(projectPath);
+            LOGGER.info("Project saved by UI to {}", projectPath.toAbsolutePath());
             appendMetric("Proyecto guardado en " + projectPath);
         } catch (IOException exception) {
+            LOGGER.error("Failed to save project to {}", projectPath.toAbsolutePath(), exception);
             appendMetric("No se pudo guardar el proyecto: " + exception.getMessage());
+            publishUserNotification(
+                    UserNotificationLevel.ERROR,
+                    "Guardar proyecto",
+                    "No se pudo guardar el proyecto",
+                    exception.getMessage()
+            );
         }
     }
 
@@ -523,6 +537,7 @@ public final class StudioShellViewModel {
             projectSessionState.setCurrentProjectFilePath(projectPath);
             projectSessionState.setCurrentCameraState(projectSessionState.resolveInitialCameraState(projectSessionState.currentProject(), false));
             resetPreviewSurface();
+            LOGGER.info("Project loaded by UI from {}", projectPath.toAbsolutePath());
             appendMetric("Proyecto cargado desde " + projectPath);
             refreshDerivedState();
             refreshRenderJobs();
@@ -530,7 +545,14 @@ public final class StudioShellViewModel {
                 requestAutoPreview();
             }
         } catch (IOException exception) {
+            LOGGER.error("Failed to load project from {}", projectPath.toAbsolutePath(), exception);
             appendMetric("No se pudo cargar el proyecto: " + exception.getMessage());
+            publishUserNotification(
+                    UserNotificationLevel.ERROR,
+                    "Abrir proyecto",
+                    "No se pudo abrir el proyecto",
+                    exception.getMessage()
+            );
             createNewProject(shouldRequestPreview);
         }
     }
@@ -569,18 +591,29 @@ public final class StudioShellViewModel {
             double keyframeStepSeconds,
             String defaultRenderPreset
     ) {
-        Project updatedProject = projectFacade.renameProject(projectSessionState.currentProject(), newProjectName);
-        updatedProject = projectFacade.updateProjectDescription(updatedProject, description);
-        updatedProject = projectFacade.updateProjectSettings(
-                updatedProject,
-                defaultFramesPerSecond,
-                estimateRenderFrameCount(defaultDurationSeconds, defaultFramesPerSecond),
-                keyframeStepSeconds,
-                RenderPreset.valueOf(defaultRenderPreset)
-        );
-        projectSessionState.setCurrentProject(pointsTimelineCoordinator.setProject(updatedProject, false));
-        refreshDerivedState();
-        appendMetric("Project settings actualizados");
+        try {
+            Project updatedProject = projectFacade.renameProject(projectSessionState.currentProject(), newProjectName);
+            updatedProject = projectFacade.updateProjectDescription(updatedProject, description);
+            updatedProject = projectFacade.updateProjectSettings(
+                    updatedProject,
+                    defaultFramesPerSecond,
+                    estimateRenderFrameCount(defaultDurationSeconds, defaultFramesPerSecond),
+                    keyframeStepSeconds,
+                    RenderPreset.valueOf(defaultRenderPreset)
+            );
+            projectSessionState.setCurrentProject(pointsTimelineCoordinator.setProject(updatedProject, false));
+            refreshDerivedState();
+            appendMetric("Project settings actualizados");
+        } catch (DomainException exception) {
+            LOGGER.warn("Rejected project settings change: {}", exception.getMessage());
+            appendMetric("No se pudieron aplicar los ajustes: " + exception.getMessage());
+            publishUserNotification(
+                    UserNotificationLevel.WARNING,
+                    "Ajustes del proyecto",
+                    "No se pudieron aplicar los ajustes",
+                    exception.getMessage()
+            );
+        }
     }
 
     public List<String> availableFractalFormulas() {
@@ -615,47 +648,90 @@ public final class StudioShellViewModel {
             int maxIterations,
             double escapeRadius
     ) {
-        FractalFormulaType fractalFormulaType = java.util.Arrays.stream(FractalFormulaType.values())
-                .filter(type -> FractalFormulaFactory.create(type).name().equals(fractalFormulaName))
-                .findFirst()
-                .orElse(FractalFormulaType.MANDELBROT);
-        Project updatedProject = projectFacade.updateInspector(
-                projectSessionState.currentProject(),
-                fractalFormulaType,
-                colorProfileName,
-                Math.max(32, Math.min(255, maxIterations)),
-                Math.max(2.0, escapeRadius)
-        );
-        projectSessionState.setCurrentProject(pointsTimelineCoordinator.setProject(updatedProject, false));
-        refreshDerivedState();
-        appendMetric("Inspector aplicado: " + fractalFormulaName + " | " + colorProfileName
-                + " | " + projectSessionState.currentProject().renderProfile().escapeParameters().maxIterations() + " iteraciones");
-        requestAutoPreview();
+        try {
+            FractalFormulaType fractalFormulaType = java.util.Arrays.stream(FractalFormulaType.values())
+                    .filter(type -> FractalFormulaFactory.create(type).name().equals(fractalFormulaName))
+                    .findFirst()
+                    .orElse(FractalFormulaType.MANDELBROT);
+            Project updatedProject = projectFacade.updateInspector(
+                    projectSessionState.currentProject(),
+                    fractalFormulaType,
+                    colorProfileName,
+                    Math.max(32, Math.min(255, maxIterations)),
+                    Math.max(2.0, escapeRadius)
+            );
+            projectSessionState.setCurrentProject(pointsTimelineCoordinator.setProject(updatedProject, false));
+            refreshDerivedState();
+            appendMetric("Inspector aplicado: " + fractalFormulaName + " | " + colorProfileName
+                    + " | " + projectSessionState.currentProject().renderProfile().escapeParameters().maxIterations() + " iteraciones");
+            requestAutoPreview();
+        } catch (DomainException exception) {
+            LOGGER.warn("Rejected inspector change: {}", exception.getMessage());
+            appendMetric("No se pudieron aplicar los cambios del inspector: " + exception.getMessage());
+            publishUserNotification(
+                    UserNotificationLevel.WARNING,
+                    "Inspector",
+                    "No se pudieron aplicar los cambios",
+                    exception.getMessage()
+            );
+        }
     }
 
     public void submitRender(String renderName, int totalFrames, double framesPerSecond, Path baseDirectory, String renderPreset) {
-        projectSessionState.currentProject().validateRenderability();
-        openRenderQueue();
-        String effectiveRenderName = resolveRenderJobName(renderName);
-        Path outputDirectory = buildRenderOutputDirectory(baseDirectory, effectiveRenderName);
-        double durationSeconds = totalFrames / framesPerSecond;
         try {
-            prepareRenderWorkspace(outputDirectory, effectiveRenderName, totalFrames, framesPerSecond, renderPreset, durationSeconds);
-        } catch (IOException exception) {
-            appendMetric("No se pudo preparar la carpeta de render: " + exception.getMessage());
+            projectSessionState.currentProject().validateRenderability();
+        } catch (DomainException exception) {
+            LOGGER.warn("Render request rejected by domain validation: {}", exception.getMessage());
+            appendMetric("No se puede renderizar: " + exception.getMessage());
+            publishUserNotification(
+                    UserNotificationLevel.WARNING,
+                    "Render",
+                    "No se puede iniciar el render",
+                    exception.getMessage()
+            );
             return;
         }
-        RenderRequest renderRequest = new RenderRequest(
-                projectSessionState.currentProject(),
-                projectSessionState.currentCameraState(),
-                effectiveRenderName,
+        openRenderQueue();
+        double durationSeconds = totalFrames / framesPerSecond;
+        StudioRenderWorkflowCoordinator.PreparedRenderWorkspace workspace;
+        try {
+            workspace = renderWorkflowCoordinator.prepareRenderWorkspace(
+                    projectSessionState.currentProject(),
+                    projectFacade::saveProject,
+                    baseDirectory,
+                    renderName,
+                    totalFrames,
+                    framesPerSecond,
+                    renderPreset,
+                    durationSeconds
+            );
+            appendMetric(workspace.metricMessage());
+        } catch (IOException exception) {
+            appendMetric("No se pudo preparar la carpeta de render: " + exception.getMessage());
+            publishUserNotification(
+                    UserNotificationLevel.ERROR,
+                    "Render",
+                    "No se pudo preparar la carpeta de trabajo",
+                    exception.getMessage()
+            );
+            return;
+        }
+        LOGGER.info("Submitting render '{}' with {} frames at {} fps to {}",
+                workspace.renderName(),
                 totalFrames,
                 framesPerSecond,
-                outputDirectory,
-                RenderPreset.valueOf(renderPreset)
+                workspace.outputDirectory().toAbsolutePath());
+        renderWorkflowCoordinator.submitRender(
+                projectSessionState.currentProject(),
+                projectSessionState.currentCameraState(),
+                workspace,
+                totalFrames,
+                framesPerSecond,
+                renderPreset,
+                this::acceptRenderJobUpdate
         );
-        renderFacade.submitRender(renderRequest, this::acceptRenderJobUpdate);
-        appendMetric("Render solicitado para " + totalFrames + " frames en " + outputDirectory + " con preset " + renderPreset);
+        appendMetric("Render solicitado para " + totalFrames + " frames en "
+                + workspace.outputDirectory() + " con preset " + renderPreset);
         refreshRenderJobs();
     }
 
@@ -713,25 +789,19 @@ public final class StudioShellViewModel {
     }
 
     public Path defaultRenderWorkspaceBaseDirectory() {
-        Path desktopDirectory = Path.of(System.getProperty("user.home"), "Desktop");
-        if (Files.isDirectory(desktopDirectory)) {
-            return desktopDirectory;
-        }
-        return Path.of(System.getProperty("user.home"));
+        return renderWorkflowCoordinator.defaultRenderWorkspaceBaseDirectory();
     }
 
     public String currentSuggestedRenderWorkspaceName() {
-        return projectSessionState.currentProject().name().value() + " Render";
+        return renderWorkflowCoordinator.suggestedRenderWorkspaceName(projectSessionState.currentProject());
     }
 
     public Path suggestedArchivePath(RenderJobRow renderJobRow) {
-        String safeName = renderJobRow.jobName().replaceAll("[^a-zA-Z0-9-_]+", "_");
-        return storagePaths.exportStorageDirectory().resolve(safeName + ".zip");
+        return renderWorkflowCoordinator.suggestedArchivePath(renderJobRow);
     }
 
     public Path suggestedVideoPath(RenderJobRow renderJobRow) {
-        String safeName = renderJobRow.jobName().replaceAll("[^a-zA-Z0-9-_]+", "_");
-        return storagePaths.exportStorageDirectory().resolve(safeName + ".mp4");
+        return renderWorkflowCoordinator.suggestedVideoPath(renderJobRow);
     }
 
     public void exportRenderJob(RenderJobRow renderJobRow, Path archivePath) {
@@ -740,17 +810,27 @@ public final class StudioShellViewModel {
         }
         if (!Objects.equals(renderJobRow.state(), "COMPLETED")) {
             appendMetric("Solo se pueden exportar jobs completados");
+            publishUserNotification(
+                    UserNotificationLevel.WARNING,
+                    "Exportar frames",
+                    "El render aun no esta listo",
+                    "Solo se pueden exportar trabajos completados."
+            );
             return;
         }
         try {
-            Files.createDirectories(storagePaths.exportStorageDirectory());
-            ExportResult exportResult = exportFacade.exportFrames(new ExportRequest(
-                    resolveFramesDirectory(Path.of(renderJobRow.outputDirectory())),
-                    archivePath
-            ));
+            ExportResult exportResult = renderWorkflowCoordinator.exportFrames(renderJobRow, archivePath);
+            LOGGER.info("Frame archive exported to {}", exportResult.archivePath().toAbsolutePath());
             appendMetric("Exportacion completada: " + exportResult.archivePath() + " (" + exportResult.exportedFileCount() + " archivos)");
-        } catch (Exception exception) {
+        } catch (IOException exception) {
+            LOGGER.error("Failed to export render archive to {}", archivePath.toAbsolutePath(), exception);
             appendMetric("Exportacion fallida: " + exception.getMessage());
+            publishUserNotification(
+                    UserNotificationLevel.ERROR,
+                    "Exportar frames",
+                    "No se pudo exportar el archivo ZIP",
+                    exception.getMessage()
+            );
         }
     }
 
@@ -760,19 +840,27 @@ public final class StudioShellViewModel {
         }
         if (!Objects.equals(renderJobRow.state(), "COMPLETED")) {
             appendMetric("Solo se pueden exportar videos de jobs completados");
+            publishUserNotification(
+                    UserNotificationLevel.WARNING,
+                    "Guardar video",
+                    "El render aun no esta listo",
+                    "Solo se pueden exportar videos de trabajos completados."
+            );
             return;
         }
         try {
-            Files.createDirectories(storagePaths.exportStorageDirectory());
-            Path sourceVideo = Path.of(renderJobRow.outputDirectory()).resolve("render.mp4");
-            if (!Files.exists(sourceVideo)) {
-                appendMetric("No se encontro el video MP4 generado");
-                return;
-            }
-            Files.copy(sourceVideo, destinationVideo, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            renderWorkflowCoordinator.exportVideo(renderJobRow, destinationVideo);
+            LOGGER.info("Video exported to {}", destinationVideo.toAbsolutePath());
             appendMetric("Video exportado: " + destinationVideo);
-        } catch (Exception exception) {
+        } catch (IOException exception) {
+            LOGGER.error("Failed to export video to {}", destinationVideo.toAbsolutePath(), exception);
             appendMetric("Exportacion de video fallida: " + exception.getMessage());
+            publishUserNotification(
+                    UserNotificationLevel.ERROR,
+                    "Guardar video",
+                    "No se pudo exportar el video",
+                    exception.getMessage()
+            );
         }
     }
 
@@ -921,8 +1009,27 @@ public final class StudioShellViewModel {
         return pendingDeepZoomAdvisory;
     }
 
+    /**
+     * Exposes pending user notifications that the desktop shell should present.
+     *
+     * <p>The property behaves like a transient event channel. The shell reads
+     * the current value, displays it and then clears it explicitly.
+     *
+     * @return notification property
+     */
+    public ReadOnlyObjectProperty<UserNotification> pendingUserNotificationProperty() {
+        return pendingUserNotification;
+    }
+
     public void clearPendingDeepZoomAdvisory() {
         pendingDeepZoomAdvisory.set(null);
+    }
+
+    /**
+     * Clears the current pending user notification after it has been presented.
+     */
+    public void clearPendingUserNotification() {
+        pendingUserNotification.set(null);
     }
 
     private void acceptRenderJobUpdate(RenderJobStatusDto statusDto) {
@@ -978,9 +1085,8 @@ public final class StudioShellViewModel {
         metricsText.set(currentText.isBlank() ? line : line + System.lineSeparator() + currentText);
     }
 
-    private Path resolveFramesDirectory(Path outputDirectory) {
-        Path framesDirectory = outputDirectory.resolve("frames");
-        return Files.exists(framesDirectory) ? framesDirectory : outputDirectory;
+    private void publishUserNotification(UserNotificationLevel level, String title, String header, String message) {
+        pendingUserNotification.set(new UserNotification(level, title, header, message));
     }
 
     private void acceptRenderedPreview(RenderedFrame renderedFrame) {
@@ -1022,53 +1128,10 @@ public final class StudioShellViewModel {
         // The desktop session is intentionally ephemeral; previous render jobs are not restored.
     }
 
-    private Path buildRenderOutputDirectory(Path baseDirectory, String renderName) {
-        Path normalizedBaseDirectory = (baseDirectory == null ? defaultRenderWorkspaceBaseDirectory() : baseDirectory).toAbsolutePath();
-        String safeName = normalizeRenderWorkspaceName(renderName);
-        Path candidate = normalizedBaseDirectory.resolve(safeName);
-        if (Files.notExists(candidate)) {
-            return candidate;
-        }
-        return normalizedBaseDirectory.resolve(safeName + "-" + System.currentTimeMillis());
-    }
-
-    private String normalizeRenderWorkspaceName(String renderName) {
-        String fallbackName = projectSessionState.currentProject() == null
-                ? "fractal-render"
-                : projectSessionState.currentProject().name().value() + "-render";
-        String rawName = renderName == null || renderName.isBlank() ? fallbackName : renderName.trim();
-        String normalized = rawName.replaceAll("[^a-zA-Z0-9-_]+", "-")
-                .replaceAll("-{2,}", "-")
-                .replaceAll("(^-+)|(-+$)", "");
-        return normalized.isBlank() ? "fractal-render" : normalized;
-    }
-
-    private String resolveRenderJobName(String renderName) {
-        String fallbackName = projectSessionState.currentProject() == null
-                ? "Fractal Render"
-                : projectSessionState.currentProject().name().value() + " Render";
-        return renderName == null || renderName.isBlank() ? fallbackName : renderName.trim();
-    }
-
     private void purgeSessionStorage() {
         deleteRecursively(storagePaths.projectStorageDirectory());
         deleteRecursively(storagePaths.renderStorageDirectory());
         deleteRecursively(storagePaths.exportStorageDirectory());
-    }
-
-    private void prepareRenderWorkspace(
-            Path outputDirectory,
-            String renderName,
-            int totalFrames,
-            double framesPerSecond,
-            String renderPreset,
-            double durationSeconds
-    ) throws IOException {
-        Files.createDirectories(outputDirectory);
-        Path projectSnapshotPath = outputDirectory.resolve("project.fractalstudio.json");
-        projectFacade.saveProject(projectSessionState.currentProject(), projectSnapshotPath);
-        appendMetric("Proyecto del render guardado en " + projectSnapshotPath + " | " + totalFrames + " frames a "
-                + framesPerSecond + " fps | " + durationSeconds + " s | " + renderPreset + " | " + renderName);
     }
 
     private void deleteRecursively(Path path) {

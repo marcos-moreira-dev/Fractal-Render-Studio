@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionService;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
@@ -177,7 +178,7 @@ public final class GeneratePreviewUseCase {
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new CancellationException("Preview rendering was interrupted.");
-        } catch (Exception exception) {
+        } catch (ExecutionException exception) {
             throw new IllegalStateException("Preview rendering failed.", exception);
         }
 

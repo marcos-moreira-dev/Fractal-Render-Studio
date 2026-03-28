@@ -5,9 +5,11 @@ import com.marcos.fractalstudio.presentation.inspector.InspectorView;
 import com.marcos.fractalstudio.presentation.metrics.MetricsView;
 import com.marcos.fractalstudio.presentation.renderqueue.RenderQueueView;
 import com.marcos.fractalstudio.presentation.timeline.TimelineView;
+import com.marcos.fractalstudio.presentation.common.UserNotification;
+import com.marcos.fractalstudio.presentation.common.UserNotificationLevel;
 
 import com.marcos.fractalstudio.presentation.dialogs.ProjectSettingsDialog;
-import com.marcos.fractalstudio.presentation.dialogs.DialogStyler;
+import com.marcos.fractalstudio.presentation.dialogs.ExceptionAlertPresenter;
 import com.marcos.fractalstudio.presentation.dialogs.RenderSettingsDialog;
 import com.marcos.fractalstudio.presentation.navigation.Route;
 import com.marcos.fractalstudio.presentation.navigation.StudioNavigator;
@@ -17,7 +19,6 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.Parent;
-import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.MenuButton;
@@ -40,6 +41,7 @@ public final class StudioShellView {
 
     private final BorderPane root;
     private final StackPane contentHost = new StackPane();
+    private final ExceptionAlertPresenter alertPresenter = new ExceptionAlertPresenter();
 
     public StudioShellView(StudioShellViewModel viewModel, StudioNavigator navigator, ViewRegistry viewRegistry) {
         root = new BorderPane();
@@ -52,14 +54,23 @@ public final class StudioShellView {
             if (newValue == null || root.getScene() == null || root.getScene().getWindow() == null) {
                 return;
             }
-            Alert alert = new Alert(Alert.AlertType.WARNING);
-            alert.setTitle("Deep Zoom");
-            alert.setHeaderText(newValue.headline());
-            alert.setContentText(newValue.message());
-            alert.initOwner(root.getScene().getWindow());
-            DialogStyler.apply(alert);
-            alert.showAndWait();
+            alertPresenter.show(
+                    root.getScene().getWindow(),
+                    new UserNotification(
+                            UserNotificationLevel.WARNING,
+                            "Deep Zoom",
+                            newValue.headline(),
+                            newValue.message()
+                    )
+            );
             viewModel.clearPendingDeepZoomAdvisory();
+        });
+        viewModel.pendingUserNotificationProperty().addListener((ignored, oldValue, newValue) -> {
+            if (newValue == null || root.getScene() == null || root.getScene().getWindow() == null) {
+                return;
+            }
+            alertPresenter.show(root.getScene().getWindow(), newValue);
+            viewModel.clearPendingUserNotification();
         });
         navigator.activeRouteProperty().addListener((ignored, oldRoute, newRoute) -> showRoute(newRoute, viewRegistry));
         showRoute(navigator.activeRoute(), viewRegistry);

@@ -1,6 +1,7 @@
 package com.marcos.fractalstudio.domain.project;
 
 import com.marcos.fractalstudio.domain.color.ColorProfile;
+import com.marcos.fractalstudio.domain.exceptions.DomainException;
 import com.marcos.fractalstudio.domain.fractal.FractalFormula;
 import com.marcos.fractalstudio.domain.render.RenderProfile;
 import com.marcos.fractalstudio.domain.timeline.Timeline;
@@ -117,7 +118,7 @@ public final class Project {
      * <p>The actual rules live in {@link ProjectRenderabilityValidator} so that
      * validation remains testable and reusable outside the aggregate itself.
      *
-     * @throws IllegalStateException when the project cannot be rendered safely
+     * @throws com.marcos.fractalstudio.domain.exceptions.ProjectRenderabilityException when the project cannot be rendered safely
      */
     public void validateRenderability() {
         new ProjectRenderabilityValidator().validate(this);
@@ -133,7 +134,7 @@ public final class Project {
         try {
             validateRenderability();
             return true;
-        } catch (IllegalStateException exception) {
+        } catch (DomainException exception) {
             return false;
         }
     }

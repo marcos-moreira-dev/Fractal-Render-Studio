@@ -1,10 +1,13 @@
 package com.marcos.fractalstudio.infrastructure.export;
 
+import com.marcos.fractalstudio.infrastructure.exceptions.VideoEncodingException;
 import org.bytedeco.ffmpeg.global.avcodec;
 import org.bytedeco.ffmpeg.global.avutil;
 import org.bytedeco.javacv.FFmpegFrameRecorder;
 import org.bytedeco.javacv.Frame;
 import org.bytedeco.javacv.Java2DFrameConverter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.imageio.ImageIO;
 import java.awt.Graphics2D;
@@ -20,6 +23,8 @@ import java.util.List;
  * Produces Windows-compatible MP4 files using FFmpeg through JavaCV.
  */
 public final class Mp4SequenceVideoExporter implements SequenceVideoExporter {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(Mp4SequenceVideoExporter.class);
 
     @Override
     /**
@@ -39,46 +44,59 @@ public final class Mp4SequenceVideoExporter implements SequenceVideoExporter {
      * @throws IOException when no frames exist or FFmpeg encoding fails
      */
     public Path exportVideo(Path sourceDirectory, Path destinationVideo, double framesPerSecond) throws IOException {
-        Files.createDirectories(destinationVideo.getParent());
-        List<Path> frameFiles = Files.list(sourceDirectory)
-                .filter(path -> path.getFileName().toString().startsWith("frame_"))
-                .filter(path -> path.getFileName().toString().endsWith(".png"))
-                .sorted(Comparator.comparing(path -> path.getFileName().toString()))
-                .toList();
-        if (frameFiles.isEmpty()) {
-            throw new IOException("No hay frames PNG para codificar video.");
-        }
-
-        BufferedImage firstImage = readFrame(frameFiles.getFirst());
-        int width = ensureEven(firstImage.getWidth());
-        int height = ensureEven(firstImage.getHeight());
-
-        FFmpegFrameRecorder recorder = new FFmpegFrameRecorder(destinationVideo.toFile(), width, height);
-        Java2DFrameConverter converter = new Java2DFrameConverter();
         try {
-            recorder.setFormat("mp4");
-            recorder.setVideoCodec(avcodec.AV_CODEC_ID_H264);
-            recorder.setPixelFormat(avutil.AV_PIX_FMT_YUV420P);
-            recorder.setFrameRate(framesPerSecond);
-            recorder.setVideoBitrate(Math.max(4_000_000, width * height * 4));
-            recorder.setGopSize(Math.max(12, (int) Math.round(framesPerSecond)));
-            recorder.start();
+            Files.createDirectories(destinationVideo.getParent());
+            List<Path> frameFiles;
+            try (var frameStream = Files.list(sourceDirectory)) {
+                frameFiles = frameStream
+                        .filter(path -> path.getFileName().toString().startsWith("frame_"))
+                        .filter(path -> path.getFileName().toString().endsWith(".png"))
+                        .sorted(Comparator.comparing(path -> path.getFileName().toString()))
+                        .toList();
+            }
+            if (frameFiles.isEmpty()) {
+                throw new VideoEncodingException("No hay frames PNG para codificar video.", null);
+            }
 
-            for (Path frameFile : frameFiles) {
-                BufferedImage image = normalizeFrame(readFrame(frameFile), width, height);
-                Frame frame = converter.convert(image);
-                recorder.record(frame);
-            }
-            recorder.stop();
-        } catch (org.bytedeco.javacv.FFmpegFrameRecorder.Exception exception) {
-            throw new IOException("No se pudo codificar el video MP4.", exception);
-        } finally {
+            BufferedImage firstImage = readFrame(frameFiles.getFirst());
+            int width = ensureEven(firstImage.getWidth());
+            int height = ensureEven(firstImage.getHeight());
+
+            FFmpegFrameRecorder recorder = new FFmpegFrameRecorder(destinationVideo.toFile(), width, height);
+            Java2DFrameConverter converter = new Java2DFrameConverter();
             try {
-                recorder.release();
-            } catch (org.bytedeco.javacv.FFmpegFrameRecorder.Exception ignored) {
-                // Release is best-effort after stop failure.
+                recorder.setFormat("mp4");
+                recorder.setVideoCodec(avcodec.AV_CODEC_ID_H264);
+                recorder.setPixelFormat(avutil.AV_PIX_FMT_YUV420P);
+                recorder.setFrameRate(framesPerSecond);
+                recorder.setVideoBitrate(Math.max(4_000_000, width * height * 4));
+                recorder.setGopSize(Math.max(12, (int) Math.round(framesPerSecond)));
+                recorder.start();
+
+                for (Path frameFile : frameFiles) {
+                    BufferedImage image = normalizeFrame(readFrame(frameFile), width, height);
+                    Frame frame = converter.convert(image);
+                    recorder.record(frame);
+                }
+                recorder.stop();
+            } finally {
+                try {
+                    recorder.release();
+                } catch (org.bytedeco.javacv.FFmpegFrameRecorder.Exception ignored) {
+                    // Best-effort resource release after stop/start failure.
+                }
+                converter.close();
             }
-            converter.close();
+            LOGGER.info("MP4 encoded to {} from {} frames at {} fps",
+                    destinationVideo.toAbsolutePath(),
+                    frameFiles.size(),
+                    framesPerSecond);
+        } catch (org.bytedeco.javacv.FFmpegFrameRecorder.Exception exception) {
+            LOGGER.error("FFmpeg failed while encoding {}", destinationVideo.toAbsolutePath(), exception);
+            throw new VideoEncodingException("No se pudo codificar el video MP4.", exception);
+        } catch (IOException exception) {
+            LOGGER.error("Video export failed for destination {}", destinationVideo.toAbsolutePath(), exception);
+            throw new VideoEncodingException("No se pudo preparar el video MP4.", exception);
         }
         return destinationVideo;
     }
