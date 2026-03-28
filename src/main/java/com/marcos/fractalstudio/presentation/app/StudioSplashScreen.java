@@ -11,7 +11,6 @@ import javafx.scene.control.ProgressIndicator;
 import javafx.scene.layout.HBox;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
-import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.stage.Screen;
@@ -32,8 +31,8 @@ public final class StudioSplashScreen {
 
     private static final Duration MINIMUM_VISIBLE_DURATION = Duration.seconds(5);
     private static final double SPLASH_WIDTH = 560.0;
-    private static final double SPLASH_HEIGHT = 320.0;
-    private static final Rectangle2D WORDMARK_VIEWPORT = new Rectangle2D(90.0, 40.0, 1360.0, 620.0);
+    private static final double SPLASH_HEIGHT = 470.0;
+    private static final Rectangle2D WORDMARK_VIEWPORT = new Rectangle2D(70.0, 25.0, 1400.0, 760.0);
 
     private final Stage stage = new Stage(StageStyle.TRANSPARENT);
     private final long shownAtNanos;
@@ -79,8 +78,8 @@ public final class StudioSplashScreen {
         ));
         wordmarkView.setViewport(WORDMARK_VIEWPORT);
         wordmarkView.setPreserveRatio(true);
-        wordmarkView.setFitWidth(445.0);
-        wordmarkView.setFitHeight(180.0);
+        wordmarkView.setFitWidth(470.0);
+        wordmarkView.setFitHeight(245.0);
         wordmarkView.setSmooth(true);
 
         Label subtitle = new Label("Inicializando explorador fractal y pipeline de render");
@@ -116,10 +115,12 @@ public final class StudioSplashScreen {
         loadingRow.setAlignment(Pos.CENTER);
         loadingRow.setPadding(new Insets(2.0, 16.0, 0.0, 16.0));
 
-        Region spacer = new Region();
-        spacer.setPrefHeight(100.0);
+        VBox lowerBlock = new VBox(18.0, subtitle, loadingRow);
+        lowerBlock.setAlignment(Pos.CENTER);
+        lowerBlock.setMaxWidth(Double.MAX_VALUE);
+        lowerBlock.setPadding(new Insets(0.0, 0.0, 10.0, 0.0));
 
-        VBox root = new VBox(14.0, wordmarkView, subtitle, spacer, loadingRow);
+        VBox root = new VBox(0.0, wordmarkView, lowerBlock);
         root.setAlignment(Pos.CENTER);
         root.setPadding(new Insets(24.0, 34.0, 28.0, 34.0));
         root.setStyle("""
@@ -131,6 +132,7 @@ public final class StudioSplashScreen {
                 -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.45), 28, 0.25, 0, 10);
                 """);
         root.setMinSize(SPLASH_WIDTH, SPLASH_HEIGHT);
+        VBox.setMargin(wordmarkView, new Insets(0.0, 0.0, 90.0, 0.0));
 
         Scene scene = new Scene(root, SPLASH_WIDTH, SPLASH_HEIGHT);
         scene.setFill(Color.TRANSPARENT);
