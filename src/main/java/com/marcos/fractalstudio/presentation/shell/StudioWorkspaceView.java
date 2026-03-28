@@ -178,7 +178,7 @@ public final class StudioWorkspaceView extends BorderPane {
             if (newTab == null) {
                 return;
             }
-            if (newTab == StudioShellViewModel.WorkspaceDrawerTab.RENDER_QUEUE) {
+            if (newTab == WorkspaceDrawerTab.RENDER_QUEUE) {
                 bottomTabs.getSelectionModel().select(1);
                 return;
             }

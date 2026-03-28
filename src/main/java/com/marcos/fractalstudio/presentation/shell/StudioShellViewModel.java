@@ -14,7 +14,6 @@ import com.marcos.fractalstudio.application.preview.ZoomLimitPolicy;
 import com.marcos.fractalstudio.application.project.ProjectFacade;
 import com.marcos.fractalstudio.application.render.RenderFacade;
 import com.marcos.fractalstudio.application.render.RenderRequest;
-import com.marcos.fractalstudio.application.renderhistory.RenderHistoryFacade;
 import com.marcos.fractalstudio.domain.camera.CameraState;
 import com.marcos.fractalstudio.domain.camera.FractalCoordinate;
 import com.marcos.fractalstudio.domain.camera.ZoomLevel;
@@ -23,12 +22,7 @@ import com.marcos.fractalstudio.domain.fractal.FractalFormulaFactory;
 import com.marcos.fractalstudio.domain.fractal.FractalFormulaType;
 import com.marcos.fractalstudio.domain.project.Project;
 import com.marcos.fractalstudio.domain.project.ProjectBookmark;
-import com.marcos.fractalstudio.domain.project.ProjectBookmarkId;
 import com.marcos.fractalstudio.domain.render.RenderPreset;
-import com.marcos.fractalstudio.domain.timeline.Keyframe;
-import com.marcos.fractalstudio.domain.timeline.KeyframeId;
-import com.marcos.fractalstudio.domain.timeline.TimePosition;
-import com.marcos.fractalstudio.domain.timeline.Timeline;
 import com.marcos.fractalstudio.infrastructure.rendering.AdaptiveEscapeBudget;
 import com.marcos.fractalstudio.presentation.common.UiThreadExecutor;
 import com.marcos.fractalstudio.presentation.renderqueue.RenderJobRow;
@@ -90,10 +84,6 @@ public final class StudioShellViewModel {
     private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm:ss");
     private static final Duration INTERACTION_PREVIEW_DEBOUNCE = Duration.millis(220);
     private static final double VIEWPORT_RESIZE_EPSILON = 8.0;
-    private static final CameraState DEFAULT_CAMERA_STATE = new CameraState(
-            new FractalCoordinate(-0.5, 0.0),
-            new ZoomLevel(1.0)
-    );
     private static final double QUICK_ZOOM_IN_FACTOR = 1.18;
     private static final double QUICK_ZOOM_OUT_FACTOR = 0.85;
     private static final double KEYBOARD_PAN_STEP = 0.10;
@@ -101,12 +91,14 @@ public final class StudioShellViewModel {
 
     private final ProjectFacade projectFacade;
     private final RenderFacade renderFacade;
-    private final RenderHistoryFacade renderHistoryFacade;
     private final ExportFacade exportFacade;
     private final UiThreadExecutor uiThreadExecutor;
     private final StudioStoragePaths storagePaths;
     private final StudioPreviewCoordinator previewCoordinator;
-    private final Map<String, RenderJobRow> renderJobRowsById = new LinkedHashMap<>();
+    private final StudioPointsTimelineCoordinator pointsTimelineCoordinator = new StudioPointsTimelineCoordinator();
+    private final StudioRenderQueueState renderQueueState = new StudioRenderQueueState();
+    private final StudioInspectorState inspectorState = new StudioInspectorState();
+    private final StudioProjectSessionState projectSessionState = new StudioProjectSessionState();
     private final Map<String, BookmarkSidebarItem> bookmarkSidebarItemsById = new LinkedHashMap<>();
     private final PauseTransition previewRefreshDebounce = new PauseTransition(Duration.ZERO);
     private final AtomicLong thumbnailGeneration = new AtomicLong();
@@ -115,48 +107,20 @@ public final class StudioShellViewModel {
     private final ObjectProperty<Image> previewImage = new SimpleObjectProperty<>();
     private final ObjectProperty<TreeItem<SidebarTreeNode>> projectTreeRoot =
             new SimpleObjectProperty<>(new TreeItem<>(SidebarTreeNode.root("Project")));
-    private final StringProperty projectName = new SimpleStringProperty();
-    private final StringProperty formulaName = new SimpleStringProperty();
-    private final StringProperty colorProfileName = new SimpleStringProperty();
-    private final StringProperty renderProfileName = new SimpleStringProperty();
-    private final StringProperty resolutionLabel = new SimpleStringProperty();
-    private final StringProperty cameraCenterLabel = new SimpleStringProperty();
-    private final StringProperty cameraZoomLabel = new SimpleStringProperty();
-    private final StringProperty previewIterationsLabel = new SimpleStringProperty();
-    private final StringProperty previewModeLabel = new SimpleStringProperty();
-    private final StringProperty deepZoomHealthLabel = new SimpleStringProperty();
-    private final StringProperty deepZoomMemoryLabel = new SimpleStringProperty();
-    private final StringProperty defaultRenderPresetLabel = new SimpleStringProperty();
-    private final StringProperty bookmarkSummary = new SimpleStringProperty();
-    private final SimpleIntegerProperty configuredMaxIterations = new SimpleIntegerProperty();
-    private final SimpleDoubleProperty configuredEscapeRadius = new SimpleDoubleProperty();
-    private final StringProperty timelineSummary = new SimpleStringProperty();
-    private final StringProperty projectDescription = new SimpleStringProperty();
-    private final StringProperty projectCreatedAt = new SimpleStringProperty();
-    private final StringProperty projectUpdatedAt = new SimpleStringProperty();
-    private final StringProperty projectDefaultFps = new SimpleStringProperty();
     private final StringProperty viewportStatus = new SimpleStringProperty("Esperando preview");
     private final StringProperty metricsText = new SimpleStringProperty("");
-    private final SimpleObjectProperty<WorkspaceDrawerTab> workspaceDrawerTab = new SimpleObjectProperty<>(WorkspaceDrawerTab.POINTS);
-    private final javafx.beans.property.SimpleBooleanProperty workspaceDrawerVisible = new javafx.beans.property.SimpleBooleanProperty(false);
     private final ObservableList<KeyframeDto> keyframes = FXCollections.observableArrayList();
     private final ObservableList<KeyframeTimelineItem> timelineItems = FXCollections.observableArrayList();
-    private final ObservableList<RenderJobRow> renderJobs = FXCollections.observableArrayList();
     private final ObjectProperty<DeepZoomAdvisory> pendingDeepZoomAdvisory = new SimpleObjectProperty<>();
 
-    private Project currentProject;
-    private Path currentProjectFilePath;
-    private CameraState currentCameraState;
     private double viewportWidth = 960.0;
     private double viewportHeight = 540.0;
-    private int selectedBookmarkIndex = -1;
 
     /**
      * Creates the shared shell view model used across the desktop UI.
      *
      * @param projectFacade application boundary for project editing and persistence
      * @param renderFacade application boundary for preview and render jobs
-     * @param renderHistoryFacade persistence boundary for render history
      * @param exportFacade application boundary for archive export
      * @param uiThreadExecutor JavaFX thread dispatcher
      * @param storageRoot base storage directory used by the desktop app
@@ -164,14 +128,12 @@ public final class StudioShellViewModel {
     public StudioShellViewModel(
             ProjectFacade projectFacade,
             RenderFacade renderFacade,
-            RenderHistoryFacade renderHistoryFacade,
             ExportFacade exportFacade,
             UiThreadExecutor uiThreadExecutor,
             Path storageRoot
     ) {
         this.projectFacade = projectFacade;
         this.renderFacade = renderFacade;
-        this.renderHistoryFacade = renderHistoryFacade;
         this.exportFacade = exportFacade;
         this.uiThreadExecutor = uiThreadExecutor;
         this.storagePaths = StudioStoragePaths.from(storageRoot);
@@ -198,15 +160,15 @@ public final class StudioShellViewModel {
     }
 
     private void createNewProject(boolean shouldRequestPreview) {
-        currentProject = projectFacade.createProject("Fractal Render Studio");
-        currentProject = synchronizePointsProject(currentProject);
-        currentProjectFilePath = null;
-        currentCameraState = DEFAULT_CAMERA_STATE;
-        selectedBookmarkIndex = -1;
-        renderJobRowsById.clear();
-        renderJobs.clear();
+        projectSessionState.setCurrentProject(pointsTimelineCoordinator.setProject(
+                projectFacade.createProject("Fractal Render Studio"),
+                true
+        ));
+        projectSessionState.clearCurrentProjectFilePath();
+        projectSessionState.resetCamera();
+        renderQueueState.clear();
         resetPreviewSurface();
-        appendMetric("Proyecto creado: " + currentProject.name().value());
+        appendMetric("Proyecto creado: " + projectSessionState.currentProject().name().value());
         refreshDerivedState();
         if (shouldRequestPreview) {
             requestAutoPreview();
@@ -226,9 +188,8 @@ public final class StudioShellViewModel {
         thumbnailGeneration.incrementAndGet();
         bookmarkThumbnailGeneration.incrementAndGet();
         previewImage.set(null);
-        renderJobRowsById.clear();
+        renderQueueState.clear();
         bookmarkSidebarItemsById.clear();
-        renderJobs.clear();
         timelineItems.clear();
         keyframes.clear();
         purgeSessionStorage();
@@ -243,16 +204,7 @@ public final class StudioShellViewModel {
      * entries should behave as one concept" is enforced operationally.
      */
     public void addPoint() {
-        String pointLabel = nextPointLabel();
-        currentProject = projectFacade.addBookmark(currentProject, currentCameraState);
-        ProjectBookmark bookmark = currentProject.bookmarks().getLast();
-        currentProject = projectFacade.renameBookmark(currentProject, bookmark.id().value(), pointLabel);
-        currentProject = projectFacade.createKeyframeFromBookmark(currentProject, bookmark.id().value());
-        String keyframeId = currentProject.timeline().keyframes().getLast().id().value();
-        currentProject = projectFacade.renameKeyframe(currentProject, keyframeId, pointLabel);
-        selectedBookmarkIndex = currentProject.bookmarks().size() - 1;
-        refreshDerivedState();
-        appendMetric("Punto guardado: " + pointLabel);
+        applyPointMutation(pointsTimelineCoordinator.addPoint(projectFacade, projectSessionState.currentCameraState()));
     }
 
     /**
@@ -272,23 +224,7 @@ public final class StudioShellViewModel {
      * @param newLabel updated label
      */
     public void renameKeyframe(String keyframeId, String newLabel) {
-        String normalizedLabel = newLabel == null ? "" : newLabel.trim();
-        if (normalizedLabel.isBlank()) {
-            return;
-        }
-        String currentLabel = currentProject.timeline().keyframes().stream()
-                .filter(keyframe -> keyframe.id().value().equals(keyframeId))
-                .map(com.marcos.fractalstudio.domain.timeline.Keyframe::label)
-                .findFirst()
-                .orElse(normalizedLabel);
-        String linkedBookmarkId = findLinkedBookmarkIdForKeyframe(keyframeId);
-        currentProject = projectFacade.renameKeyframe(currentProject, keyframeId, normalizedLabel);
-        if (linkedBookmarkId != null) {
-            currentProject = projectFacade.renameBookmark(currentProject, linkedBookmarkId, normalizedLabel);
-        }
-        currentProject = synchronizePointsProject(currentProject);
-        refreshDerivedState();
-        appendMetric("Punto renombrado: " + currentLabel + " -> " + normalizedLabel);
+        applyPointMutation(pointsTimelineCoordinator.renameKeyframe(projectFacade, keyframeId, newLabel));
     }
 
     /**
@@ -297,19 +233,7 @@ public final class StudioShellViewModel {
      * @param keyframeId keyframe identifier
      */
     public void deleteKeyframe(String keyframeId) {
-        int keyframeCountBefore = currentProject.timeline().keyframes().size();
-        String linkedBookmarkId = findLinkedBookmarkIdForKeyframe(keyframeId);
-        currentProject = projectFacade.deleteKeyframe(currentProject, keyframeId);
-        if (currentProject.timeline().keyframes().size() == keyframeCountBefore) {
-            return;
-        }
-        if (linkedBookmarkId != null) {
-            currentProject = projectFacade.deleteBookmark(currentProject, linkedBookmarkId);
-        }
-        currentProject = synchronizePointsProject(currentProject);
-        refreshDerivedState();
-        appendMetric("Punto eliminado");
-        requestAutoPreview();
+        applyPointMutation(pointsTimelineCoordinator.deleteKeyframe(projectFacade, keyframeId));
     }
 
     public void addBookmark() {
@@ -317,20 +241,7 @@ public final class StudioShellViewModel {
     }
 
     public void deleteBookmark(String bookmarkId) {
-        int bookmarkCountBefore = currentProject.bookmarks().size();
-        String linkedKeyframeId = findLinkedKeyframeIdForBookmark(bookmarkId);
-        currentProject = projectFacade.deleteBookmark(currentProject, bookmarkId);
-        if (currentProject.bookmarks().size() == bookmarkCountBefore) {
-            return;
-        }
-        if (linkedKeyframeId != null) {
-            currentProject = projectFacade.deleteKeyframe(currentProject, linkedKeyframeId);
-        }
-        selectedBookmarkIndex = Math.min(selectedBookmarkIndex, currentProject.bookmarks().size() - 1);
-        currentProject = synchronizePointsProject(currentProject);
-        refreshDerivedState();
-        appendMetric("Punto eliminado");
-        requestAutoPreview();
+        applyPointMutation(pointsTimelineCoordinator.deleteBookmark(projectFacade, bookmarkId));
     }
 
     /**
@@ -340,23 +251,7 @@ public final class StudioShellViewModel {
      * @param newLabel user-facing label to persist
      */
     public void renameBookmark(String bookmarkId, String newLabel) {
-        String normalizedLabel = newLabel == null ? "" : newLabel.trim();
-        if (normalizedLabel.isBlank()) {
-            return;
-        }
-        String currentLabel = currentProject.bookmarks().stream()
-                .filter(bookmark -> bookmark.id().value().equals(bookmarkId))
-                .map(ProjectBookmark::label)
-                .findFirst()
-                .orElse(normalizedLabel);
-        String linkedKeyframeId = findLinkedKeyframeIdForBookmark(bookmarkId);
-        currentProject = projectFacade.renameBookmark(currentProject, bookmarkId, normalizedLabel);
-        if (linkedKeyframeId != null) {
-            currentProject = projectFacade.renameKeyframe(currentProject, linkedKeyframeId, normalizedLabel);
-        }
-        currentProject = synchronizePointsProject(currentProject);
-        refreshDerivedState();
-        appendMetric("Punto renombrado: " + currentLabel + " -> " + normalizedLabel);
+        applyPointMutation(pointsTimelineCoordinator.renameBookmark(projectFacade, bookmarkId, newLabel));
     }
 
     /**
@@ -366,40 +261,11 @@ public final class StudioShellViewModel {
      * @param direction negative for up, positive for down
      */
     public void moveBookmark(String bookmarkId, int direction) {
-        if (direction == 0) {
-            return;
-        }
-        int previousIndex = indexOfBookmark(bookmarkId);
-        if (previousIndex < 0) {
-            return;
-        }
-        int targetIndex = Math.max(0, Math.min(currentProject.bookmarks().size() - 1, previousIndex + direction));
-        if (targetIndex == previousIndex) {
-            return;
-        }
-        currentProject = projectFacade.moveBookmark(currentProject, bookmarkId, direction);
-        selectedBookmarkIndex = targetIndex;
-        currentProject = synchronizePointsProject(currentProject);
-        refreshDerivedState();
-        appendMetric("Punto reordenado");
+        applyPointMutation(pointsTimelineCoordinator.moveBookmark(projectFacade, bookmarkId, direction));
     }
 
     public void createKeyframeFromBookmark(String bookmarkId) {
-        int keyframeCountBefore = currentProject.timeline().keyframes().size();
-        currentProject = projectFacade.createKeyframeFromBookmark(currentProject, bookmarkId);
-        if (currentProject.timeline().keyframes().size() == keyframeCountBefore) {
-            return;
-        }
-        String bookmarkLabel = currentProject.bookmarks().stream()
-                .filter(bookmark -> bookmark.id().value().equals(bookmarkId))
-                .map(ProjectBookmark::label)
-                .findFirst()
-                .orElse("Punto");
-        String createdKeyframeId = currentProject.timeline().keyframes().getLast().id().value();
-        currentProject = projectFacade.renameKeyframe(currentProject, createdKeyframeId, bookmarkLabel);
-        currentProject = synchronizePointsProject(currentProject);
-        refreshDerivedState();
-        appendMetric("Punto agregado al timeline");
+        applyPointMutation(pointsTimelineCoordinator.createKeyframeFromBookmark(projectFacade, bookmarkId));
     }
 
     /**
@@ -413,10 +279,10 @@ public final class StudioShellViewModel {
         double durationSeconds = currentSuggestedRenderDurationSeconds();
         submitRender(
                 currentSuggestedRenderWorkspaceName(),
-                estimateRenderFrameCount(durationSeconds, currentProject.settings().defaultFramesPerSecond()),
-                currentProject.settings().defaultFramesPerSecond(),
+                estimateRenderFrameCount(durationSeconds, projectSessionState.currentProject().settings().defaultFramesPerSecond()),
+                projectSessionState.currentProject().settings().defaultFramesPerSecond(),
                 defaultRenderWorkspaceBaseDirectory(),
-                currentProject.settings().defaultRenderPreset().name()
+                projectSessionState.currentProject().settings().defaultRenderPreset().name()
         );
     }
 
@@ -477,12 +343,12 @@ public final class StudioShellViewModel {
      * @param deltaPixelsY vertical drag delta
      */
     public void panCamera(double deltaPixelsX, double deltaPixelsY) {
-        double planeHeight = 3.0 / currentCameraState.zoomLevel().value();
+        double planeHeight = 3.0 / projectSessionState.currentCameraState().zoomLevel().value();
         double planeWidth = planeHeight * (viewportWidth / viewportHeight);
         double deltaX = (deltaPixelsX / viewportWidth) * planeWidth;
         double deltaY = (deltaPixelsY / viewportHeight) * planeHeight;
 
-        currentCameraState = currentCameraState.pan(-deltaX, -deltaY);
+        projectSessionState.setCurrentCameraState(projectSessionState.currentCameraState().pan(-deltaX, -deltaY));
         refreshCameraState();
     }
 
@@ -493,15 +359,18 @@ public final class StudioShellViewModel {
      */
     public boolean zoomCamera(double factor) {
         ZoomLimitPolicy.ZoomLimitDecision zoomDecision = ZoomLimitPolicy.evaluate(
-                currentProject.fractalFormula(),
-                currentCameraState.zoomLevel().valueDecimal(),
+                projectSessionState.currentProject().fractalFormula(),
+                projectSessionState.currentCameraState().zoomLevel().valueDecimal(),
                 factor
         );
         if (zoomDecision.blocked()) {
             handleZoomLimitReached();
             return false;
         }
-        currentCameraState = new CameraState(currentCameraState.center(), new ZoomLevel(zoomDecision.targetZoom()));
+        projectSessionState.setCurrentCameraState(new CameraState(
+                projectSessionState.currentCameraState().center(),
+                new ZoomLevel(zoomDecision.targetZoom())
+        ));
         refreshCameraState();
         return true;
     }
@@ -517,8 +386,8 @@ public final class StudioShellViewModel {
      */
     public boolean zoomCameraAt(double factor, double anchorPixelX, double anchorPixelY) {
         ZoomLimitPolicy.ZoomLimitDecision zoomDecision = ZoomLimitPolicy.evaluate(
-                currentProject.fractalFormula(),
-                currentCameraState.zoomLevel().valueDecimal(),
+                projectSessionState.currentProject().fractalFormula(),
+                projectSessionState.currentCameraState().zoomLevel().valueDecimal(),
                 factor
         );
         if (zoomDecision.blocked()) {
@@ -528,7 +397,7 @@ public final class StudioShellViewModel {
         double normalizedAnchorX = clamp(anchorPixelX / viewportWidth, 0.0, 1.0);
         double normalizedAnchorY = clamp(anchorPixelY / viewportHeight, 0.0, 1.0);
 
-        BigDecimal currentZoom = currentCameraState.zoomLevel().valueDecimal();
+        BigDecimal currentZoom = projectSessionState.currentCameraState().zoomLevel().valueDecimal();
         BigDecimal newZoom = zoomDecision.targetZoom();
         BigDecimal aspectRatio = BigDecimal.valueOf(viewportWidth / viewportHeight);
 
@@ -537,11 +406,11 @@ public final class StudioShellViewModel {
         BigDecimal newPlaneHeight = BigDecimal.valueOf(3.0).divide(newZoom, CAMERA_MATH_CONTEXT);
         BigDecimal newPlaneWidth = newPlaneHeight.multiply(aspectRatio, CAMERA_MATH_CONTEXT);
 
-        BigDecimal currentMinX = currentCameraState.center().xDecimal().subtract(
+        BigDecimal currentMinX = projectSessionState.currentCameraState().center().xDecimal().subtract(
                 currentPlaneWidth.divide(BigDecimal.valueOf(2.0), CAMERA_MATH_CONTEXT),
                 CAMERA_MATH_CONTEXT
         );
-        BigDecimal currentMinY = currentCameraState.center().yDecimal().subtract(
+        BigDecimal currentMinY = projectSessionState.currentCameraState().center().yDecimal().subtract(
                 currentPlaneHeight.divide(BigDecimal.valueOf(2.0), CAMERA_MATH_CONTEXT),
                 CAMERA_MATH_CONTEXT
         );
@@ -556,10 +425,10 @@ public final class StudioShellViewModel {
         BigDecimal newCenterX = newMinX.add(newPlaneWidth.divide(BigDecimal.valueOf(2.0), CAMERA_MATH_CONTEXT), CAMERA_MATH_CONTEXT);
         BigDecimal newCenterY = newMinY.add(newPlaneHeight.divide(BigDecimal.valueOf(2.0), CAMERA_MATH_CONTEXT), CAMERA_MATH_CONTEXT);
 
-        currentCameraState = new CameraState(
+        projectSessionState.setCurrentCameraState(new CameraState(
                 new FractalCoordinate(newCenterX, newCenterY),
                 new ZoomLevel(newZoom)
-        );
+        ));
         refreshCameraState();
         return true;
     }
@@ -581,7 +450,7 @@ public final class StudioShellViewModel {
     }
 
     public void resetCamera() {
-        currentCameraState = DEFAULT_CAMERA_STATE;
+        projectSessionState.resetCamera();
         refreshCameraState();
         appendMetric("Camara restablecida al encuadre inicial");
         requestAutoPreview();
@@ -615,18 +484,18 @@ public final class StudioShellViewModel {
      * Persists the current project snapshot to the autosave location.
      */
     public void saveProject() {
-        if (currentProjectFilePath == null) {
+        if (projectSessionState.currentProjectFilePath() == null) {
             appendMetric("Usa \"Guardar proyecto...\" para exportar el proyecto a un archivo");
             return;
         }
-        saveProjectTo(currentProjectFilePath);
+        saveProjectTo(projectSessionState.currentProjectFilePath());
     }
 
     public void saveProjectTo(Path projectPath) {
         try {
             Files.createDirectories(projectPath.toAbsolutePath().getParent());
-            projectFacade.saveProject(currentProject, projectPath);
-            currentProjectFilePath = projectPath;
+            projectFacade.saveProject(projectSessionState.currentProject(), projectPath);
+            projectSessionState.setCurrentProjectFilePath(projectPath);
             appendMetric("Proyecto guardado en " + projectPath);
         } catch (IOException exception) {
             appendMetric("No se pudo guardar el proyecto: " + exception.getMessage());
@@ -650,10 +519,9 @@ public final class StudioShellViewModel {
 
     public void loadProjectFrom(Path projectPath, boolean shouldRequestPreview) {
         try {
-            currentProject = synchronizePointsProject(projectFacade.loadProject(projectPath));
-            currentProjectFilePath = projectPath;
-            currentCameraState = resolveInitialCameraState(currentProject, false);
-            selectedBookmarkIndex = -1;
+            projectSessionState.setCurrentProject(pointsTimelineCoordinator.setProject(projectFacade.loadProject(projectPath), true));
+            projectSessionState.setCurrentProjectFilePath(projectPath);
+            projectSessionState.setCurrentCameraState(projectSessionState.resolveInitialCameraState(projectSessionState.currentProject(), false));
             resetPreviewSurface();
             appendMetric("Proyecto cargado desde " + projectPath);
             refreshDerivedState();
@@ -688,15 +556,7 @@ public final class StudioShellViewModel {
      */
     public void refreshRenderJobs() {
         uiThreadExecutor.execute(() -> {
-            for (RenderJobStatusDto statusDto : renderFacade.listRenderJobs()) {
-                RenderJobRow renderJobRow = renderJobRowsById.computeIfAbsent(statusDto.jobId(), ignored -> {
-                    RenderJobRow created = new RenderJobRow(statusDto);
-                    renderJobs.add(created);
-                    return created;
-                });
-                renderJobRow.update(statusDto);
-            }
-            renderJobs.sort((left, right) -> right.jobId().compareTo(left.jobId()));
+            renderQueueState.refresh(renderFacade.listRenderJobs());
             persistRenderHistory();
         });
     }
@@ -709,16 +569,16 @@ public final class StudioShellViewModel {
             double keyframeStepSeconds,
             String defaultRenderPreset
     ) {
-        currentProject = projectFacade.renameProject(currentProject, newProjectName);
-        currentProject = projectFacade.updateProjectDescription(currentProject, description);
-        currentProject = projectFacade.updateProjectSettings(
-                currentProject,
+        Project updatedProject = projectFacade.renameProject(projectSessionState.currentProject(), newProjectName);
+        updatedProject = projectFacade.updateProjectDescription(updatedProject, description);
+        updatedProject = projectFacade.updateProjectSettings(
+                updatedProject,
                 defaultFramesPerSecond,
                 estimateRenderFrameCount(defaultDurationSeconds, defaultFramesPerSecond),
                 keyframeStepSeconds,
                 RenderPreset.valueOf(defaultRenderPreset)
         );
-        currentProject = synchronizePointsProject(currentProject);
+        projectSessionState.setCurrentProject(pointsTimelineCoordinator.setProject(updatedProject, false));
         refreshDerivedState();
         appendMetric("Project settings actualizados");
     }
@@ -734,19 +594,19 @@ public final class StudioShellViewModel {
     }
 
     public String currentFractalFormulaName() {
-        return currentProject.fractalFormula().name();
+        return projectSessionState.currentProject().fractalFormula().name();
     }
 
     public String currentColorProfileName() {
-        return currentProject.colorProfile().name();
+        return projectSessionState.currentProject().colorProfile().name();
     }
 
     public int currentMaxIterations() {
-        return currentProject.renderProfile().escapeParameters().maxIterations();
+        return projectSessionState.currentProject().renderProfile().escapeParameters().maxIterations();
     }
 
     public double currentEscapeRadius() {
-        return currentProject.renderProfile().escapeParameters().escapeRadius();
+        return projectSessionState.currentProject().renderProfile().escapeParameters().escapeRadius();
     }
 
     public void applyInspectorSettings(
@@ -759,22 +619,22 @@ public final class StudioShellViewModel {
                 .filter(type -> FractalFormulaFactory.create(type).name().equals(fractalFormulaName))
                 .findFirst()
                 .orElse(FractalFormulaType.MANDELBROT);
-        currentProject = projectFacade.updateInspector(
-                currentProject,
+        Project updatedProject = projectFacade.updateInspector(
+                projectSessionState.currentProject(),
                 fractalFormulaType,
                 colorProfileName,
                 Math.max(32, Math.min(255, maxIterations)),
                 Math.max(2.0, escapeRadius)
         );
-        currentProject = synchronizePointsProject(currentProject);
+        projectSessionState.setCurrentProject(pointsTimelineCoordinator.setProject(updatedProject, false));
         refreshDerivedState();
         appendMetric("Inspector aplicado: " + fractalFormulaName + " | " + colorProfileName
-                + " | " + currentProject.renderProfile().escapeParameters().maxIterations() + " iteraciones");
+                + " | " + projectSessionState.currentProject().renderProfile().escapeParameters().maxIterations() + " iteraciones");
         requestAutoPreview();
     }
 
     public void submitRender(String renderName, int totalFrames, double framesPerSecond, Path baseDirectory, String renderPreset) {
-        currentProject.validateRenderability();
+        projectSessionState.currentProject().validateRenderability();
         openRenderQueue();
         String effectiveRenderName = resolveRenderJobName(renderName);
         Path outputDirectory = buildRenderOutputDirectory(baseDirectory, effectiveRenderName);
@@ -786,8 +646,8 @@ public final class StudioShellViewModel {
             return;
         }
         RenderRequest renderRequest = new RenderRequest(
-                currentProject,
-                currentCameraState,
+                projectSessionState.currentProject(),
+                projectSessionState.currentCameraState(),
                 effectiveRenderName,
                 totalFrames,
                 framesPerSecond,
@@ -800,62 +660,56 @@ public final class StudioShellViewModel {
     }
 
     public javafx.beans.property.BooleanProperty workspaceDrawerVisibleProperty() {
-        return workspaceDrawerVisible;
+        return renderQueueState.workspaceDrawerVisibleProperty();
     }
 
     public ReadOnlyObjectProperty<WorkspaceDrawerTab> workspaceDrawerTabProperty() {
-        return workspaceDrawerTab;
+        return renderQueueState.workspaceDrawerTabProperty();
     }
 
     public void togglePointsDrawer() {
-        if (workspaceDrawerVisible.get() && workspaceDrawerTab.get() == WorkspaceDrawerTab.POINTS) {
-            workspaceDrawerVisible.set(false);
-            return;
-        }
-        workspaceDrawerTab.set(WorkspaceDrawerTab.POINTS);
-        workspaceDrawerVisible.set(true);
+        renderQueueState.togglePointsDrawer();
     }
 
     public void openRenderQueue() {
-        workspaceDrawerTab.set(WorkspaceDrawerTab.RENDER_QUEUE);
-        workspaceDrawerVisible.set(true);
+        renderQueueState.openRenderQueue();
     }
 
     public void closeWorkspaceDrawer() {
-        workspaceDrawerVisible.set(false);
+        renderQueueState.closeWorkspaceDrawer();
     }
 
     public String currentProjectName() {
-        return currentProject.name().value();
+        return projectSessionState.currentProject().name().value();
     }
 
     public String currentProjectDescription() {
-        return currentProject.metadata().description();
+        return projectSessionState.currentProject().metadata().description();
     }
 
     public double currentDefaultFramesPerSecond() {
-        return currentProject.settings().defaultFramesPerSecond();
+        return projectSessionState.currentProject().settings().defaultFramesPerSecond();
     }
 
     public int currentDefaultRenderFrameCount() {
-        return currentProject.settings().defaultRenderFrameCount();
+        return projectSessionState.currentProject().settings().defaultRenderFrameCount();
     }
 
     public double currentSuggestedRenderDurationSeconds() {
-        double timelineDuration = currentProject.timeline().keyframes().isEmpty()
+        double timelineDuration = projectSessionState.currentProject().timeline().keyframes().isEmpty()
                 ? 0.0
-                : currentProject.timeline().keyframes().getLast().timePosition().seconds();
-        double defaultDuration = currentProject.settings().defaultRenderFrameCount()
-                / currentProject.settings().defaultFramesPerSecond();
+                : projectSessionState.currentProject().timeline().keyframes().getLast().timePosition().seconds();
+        double defaultDuration = projectSessionState.currentProject().settings().defaultRenderFrameCount()
+                / projectSessionState.currentProject().settings().defaultFramesPerSecond();
         return Math.max(1.0, Math.max(timelineDuration, defaultDuration));
     }
 
     public double currentKeyframeStepSeconds() {
-        return currentProject.settings().keyframeStepSeconds();
+        return projectSessionState.currentProject().settings().keyframeStepSeconds();
     }
 
     public String currentDefaultRenderPreset() {
-        return currentProject.settings().defaultRenderPreset().name();
+        return projectSessionState.currentProject().settings().defaultRenderPreset().name();
     }
 
     public Path defaultRenderWorkspaceBaseDirectory() {
@@ -867,7 +721,7 @@ public final class StudioShellViewModel {
     }
 
     public String currentSuggestedRenderWorkspaceName() {
-        return currentProject.name().value() + " Render";
+        return projectSessionState.currentProject().name().value() + " Render";
     }
 
     public Path suggestedArchivePath(RenderJobRow renderJobRow) {
@@ -942,11 +796,7 @@ public final class StudioShellViewModel {
      * @return bookmark label or an empty string when not found
      */
     public String currentBookmarkLabel(String bookmarkId) {
-        return currentProject.bookmarks().stream()
-                .filter(bookmark -> bookmark.id().value().equals(bookmarkId))
-                .map(ProjectBookmark::label)
-                .findFirst()
-                .orElse("");
+        return pointsTimelineCoordinator.currentBookmarkLabel(bookmarkId);
     }
 
     /**
@@ -956,11 +806,7 @@ public final class StudioShellViewModel {
      * @return keyframe label or an empty string when not found
      */
     public String currentKeyframeLabel(String keyframeId) {
-        return currentProject.timeline().keyframes().stream()
-                .filter(keyframe -> keyframe.id().value().equals(keyframeId))
-                .map(com.marcos.fractalstudio.domain.timeline.Keyframe::label)
-                .findFirst()
-                .orElse("");
+        return pointsTimelineCoordinator.currentKeyframeLabel(keyframeId);
     }
 
     public boolean hasPreviewImage() {
@@ -976,7 +822,7 @@ public final class StudioShellViewModel {
     }
 
     public ObservableList<RenderJobRow> renderJobs() {
-        return renderJobs;
+        return renderQueueState.renderJobs();
     }
 
     public ReadOnlyObjectProperty<TreeItem<SidebarTreeNode>> projectTreeRootProperty() {
@@ -984,83 +830,83 @@ public final class StudioShellViewModel {
     }
 
     public ReadOnlyStringProperty projectNameProperty() {
-        return projectName;
+        return inspectorState.projectNameProperty();
     }
 
     public ReadOnlyStringProperty formulaNameProperty() {
-        return formulaName;
+        return inspectorState.formulaNameProperty();
     }
 
     public ReadOnlyStringProperty colorProfileNameProperty() {
-        return colorProfileName;
+        return inspectorState.colorProfileNameProperty();
     }
 
     public ReadOnlyStringProperty renderProfileNameProperty() {
-        return renderProfileName;
+        return inspectorState.renderProfileNameProperty();
     }
 
     public ReadOnlyStringProperty resolutionLabelProperty() {
-        return resolutionLabel;
+        return inspectorState.resolutionLabelProperty();
     }
 
     public ReadOnlyStringProperty cameraCenterLabelProperty() {
-        return cameraCenterLabel;
+        return inspectorState.cameraCenterLabelProperty();
     }
 
     public ReadOnlyStringProperty cameraZoomLabelProperty() {
-        return cameraZoomLabel;
+        return inspectorState.cameraZoomLabelProperty();
     }
 
     public ReadOnlyStringProperty previewIterationsLabelProperty() {
-        return previewIterationsLabel;
+        return inspectorState.previewIterationsLabelProperty();
     }
 
     public ReadOnlyStringProperty previewModeLabelProperty() {
-        return previewModeLabel;
+        return inspectorState.previewModeLabelProperty();
     }
 
     public ReadOnlyStringProperty deepZoomHealthLabelProperty() {
-        return deepZoomHealthLabel;
+        return inspectorState.deepZoomHealthLabelProperty();
     }
 
     public ReadOnlyStringProperty deepZoomMemoryLabelProperty() {
-        return deepZoomMemoryLabel;
+        return inspectorState.deepZoomMemoryLabelProperty();
     }
 
     public ReadOnlyIntegerProperty configuredMaxIterationsProperty() {
-        return configuredMaxIterations;
+        return inspectorState.configuredMaxIterationsProperty();
     }
 
     public ReadOnlyDoubleProperty configuredEscapeRadiusProperty() {
-        return configuredEscapeRadius;
+        return inspectorState.configuredEscapeRadiusProperty();
     }
 
     public ReadOnlyStringProperty defaultRenderPresetLabelProperty() {
-        return defaultRenderPresetLabel;
+        return inspectorState.defaultRenderPresetLabelProperty();
     }
 
     public ReadOnlyStringProperty bookmarkSummaryProperty() {
-        return bookmarkSummary;
+        return inspectorState.bookmarkSummaryProperty();
     }
 
     public ReadOnlyStringProperty timelineSummaryProperty() {
-        return timelineSummary;
+        return inspectorState.timelineSummaryProperty();
     }
 
     public ReadOnlyStringProperty projectDescriptionProperty() {
-        return projectDescription;
+        return inspectorState.projectDescriptionProperty();
     }
 
     public ReadOnlyStringProperty projectCreatedAtProperty() {
-        return projectCreatedAt;
+        return inspectorState.projectCreatedAtProperty();
     }
 
     public ReadOnlyStringProperty projectUpdatedAtProperty() {
-        return projectUpdatedAt;
+        return inspectorState.projectUpdatedAtProperty();
     }
 
     public ReadOnlyStringProperty projectDefaultFpsProperty() {
-        return projectDefaultFps;
+        return inspectorState.projectDefaultFpsProperty();
     }
 
     public ReadOnlyStringProperty viewportStatusProperty() {
@@ -1081,13 +927,7 @@ public final class StudioShellViewModel {
 
     private void acceptRenderJobUpdate(RenderJobStatusDto statusDto) {
         uiThreadExecutor.execute(() -> {
-            RenderJobRow renderJobRow = renderJobRowsById.computeIfAbsent(statusDto.jobId(), ignored -> {
-                RenderJobRow created = new RenderJobRow(statusDto);
-                renderJobs.add(0, created);
-                return created;
-            });
-            renderJobRow.update(statusDto);
-            renderJobs.sort((left, right) -> right.jobId().compareTo(left.jobId()));
+            renderQueueState.acceptUpdate(statusDto, ignored -> { });
             persistRenderHistory();
             appendMetric(statusDto.jobName() + " -> " + statusDto.state().name() + " (" + statusDto.completedFrames()
                     + "/" + statusDto.totalFrames() + ")");
@@ -1095,33 +935,18 @@ public final class StudioShellViewModel {
     }
 
     private void refreshDerivedState() {
-        currentProject = synchronizePointsProject(currentProject);
-        applyProjectPresentation(StudioProjectPresentation.from(currentProject, currentCameraState, projectFacade));
+        projectSessionState.setCurrentProject(pointsTimelineCoordinator.setProject(projectSessionState.currentProject(), false));
+        applyProjectPresentation(StudioProjectPresentation.from(
+                projectSessionState.currentProject(),
+                projectSessionState.currentCameraState(),
+                projectFacade
+        ));
     }
 
     private void applyProjectPresentation(StudioProjectPresentation presentation) {
-        projectName.set(presentation.projectName());
-        formulaName.set(presentation.formulaName());
-        colorProfileName.set(presentation.colorProfileName());
-        renderProfileName.set(presentation.renderProfileName());
-        resolutionLabel.set(presentation.resolutionLabel());
-        cameraCenterLabel.set(presentation.cameraCenterLabel());
-        cameraZoomLabel.set(presentation.cameraZoomLabel());
-        previewIterationsLabel.set(presentation.previewIterationsLabel());
-        previewModeLabel.set(presentation.previewModeLabel());
-        deepZoomHealthLabel.set("Estable");
-        deepZoomMemoryLabel.set(captureMemoryPressure().compactLabel());
-        defaultRenderPresetLabel.set(presentation.defaultRenderPresetLabel());
-        bookmarkSummary.set(presentation.bookmarkSummary());
-        configuredMaxIterations.set(currentProject.renderProfile().escapeParameters().maxIterations());
-        configuredEscapeRadius.set(currentProject.renderProfile().escapeParameters().escapeRadius());
-        timelineSummary.set(presentation.timelineSummary());
-        projectDescription.set(presentation.projectDescription());
-        projectCreatedAt.set(presentation.projectCreatedAt());
-        projectUpdatedAt.set(presentation.projectUpdatedAt());
-        projectDefaultFps.set(presentation.projectDefaultFps());
+        inspectorState.applyProjectPresentation(presentation, projectSessionState.currentProject(), captureMemoryPressure());
         keyframes.setAll(presentation.keyframes());
-        timelineItems.setAll(buildTimelineItems(presentation.keyframes()));
+        timelineItems.setAll(pointsTimelineCoordinator.buildTimelineItems(presentation.keyframes()));
         projectTreeRoot.set(presentation.projectTreeRoot());
         rebuildBookmarkSidebarItems();
         regenerateTimelineThumbnails();
@@ -1129,12 +954,7 @@ public final class StudioShellViewModel {
     }
 
     private void refreshCameraState() {
-        cameraCenterLabel.set(formatDouble(currentCameraState.center().x()) + ", " + formatDouble(currentCameraState.center().y()));
-        cameraZoomLabel.set(formatDouble(currentCameraState.zoomLevel().value()) + "x");
-        previewIterationsLabel.set(AdaptiveEscapeBudget.previewIterations(
-                currentProject.renderProfile().escapeParameters().maxIterations(),
-                currentCameraState.zoomLevel().value()
-        ) + " iteraciones");
+        inspectorState.refreshCameraState(projectSessionState.currentCameraState(), projectSessionState.currentProject());
     }
 
     private WritableImage convertToImage(RenderedFrame renderedFrame) {
@@ -1167,6 +987,37 @@ public final class StudioShellViewModel {
         previewImage.set(convertToImage(renderedFrame));
     }
 
+    private void applyPointMutation(StudioPointsTimelineCoordinator.PointMutation mutation) {
+        if (!mutation.changed()) {
+            return;
+        }
+        projectSessionState.setCurrentProject(mutation.project());
+        refreshDerivedState();
+        if (mutation.metricMessage() != null) {
+            appendMetric(mutation.metricMessage());
+        }
+        if (mutation.requestAutoPreview()) {
+            requestAutoPreview();
+        }
+    }
+
+    private void applyFocusChange(StudioPointsTimelineCoordinator.FocusChange focusChange) {
+        if (!focusChange.found()) {
+            if (focusChange.metricMessage() != null) {
+                appendMetric(focusChange.metricMessage());
+            }
+            return;
+        }
+        projectSessionState.setCurrentCameraState(focusChange.cameraState());
+        refreshCameraState();
+        if (focusChange.metricMessage() != null) {
+            appendMetric(focusChange.metricMessage());
+        }
+        if (focusChange.requestAutoPreview()) {
+            requestAutoPreview();
+        }
+    }
+
     private void persistRenderHistory() {
         // The desktop session is intentionally ephemeral; previous render jobs are not restored.
     }
@@ -1182,7 +1033,9 @@ public final class StudioShellViewModel {
     }
 
     private String normalizeRenderWorkspaceName(String renderName) {
-        String fallbackName = currentProject == null ? "fractal-render" : currentProject.name().value() + "-render";
+        String fallbackName = projectSessionState.currentProject() == null
+                ? "fractal-render"
+                : projectSessionState.currentProject().name().value() + "-render";
         String rawName = renderName == null || renderName.isBlank() ? fallbackName : renderName.trim();
         String normalized = rawName.replaceAll("[^a-zA-Z0-9-_]+", "-")
                 .replaceAll("-{2,}", "-")
@@ -1191,7 +1044,9 @@ public final class StudioShellViewModel {
     }
 
     private String resolveRenderJobName(String renderName) {
-        String fallbackName = currentProject == null ? "Fractal Render" : currentProject.name().value() + " Render";
+        String fallbackName = projectSessionState.currentProject() == null
+                ? "Fractal Render"
+                : projectSessionState.currentProject().name().value() + " Render";
         return renderName == null || renderName.isBlank() ? fallbackName : renderName.trim();
     }
 
@@ -1211,7 +1066,7 @@ public final class StudioShellViewModel {
     ) throws IOException {
         Files.createDirectories(outputDirectory);
         Path projectSnapshotPath = outputDirectory.resolve("project.fractalstudio.json");
-        projectFacade.saveProject(currentProject, projectSnapshotPath);
+        projectFacade.saveProject(projectSessionState.currentProject(), projectSnapshotPath);
         appendMetric("Proyecto del render guardado en " + projectSnapshotPath + " | " + totalFrames + " frames a "
                 + framesPerSecond + " fps | " + durationSeconds + " s | " + renderPreset + " | " + renderName);
     }
@@ -1246,14 +1101,13 @@ public final class StudioShellViewModel {
         AdaptivePreviewQualityPolicy.PreviewRequestPlan previewPlan = AdaptivePreviewQualityPolicy.plan(
                 viewportWidth,
                 viewportHeight,
-                currentCameraState.zoomLevel().value(),
-                currentProject.renderProfile().escapeParameters().maxIterations(),
+                projectSessionState.currentCameraState().zoomLevel().value(),
+                projectSessionState.currentProject().renderProfile().escapeParameters().maxIterations(),
                 precise
         );
-        previewModeLabel.set(previewPlan.statusLabel());
-        previewIterationsLabel.set(previewPlan.maxIterations() + " iteraciones");
+        inspectorState.applyPreviewPlan(previewPlan.statusLabel(), previewPlan.maxIterations());
         DeepZoomAdvisory deepZoomAdvisory = DeepZoomAdvisor.evaluate(
-                currentCameraState.zoomLevel().value(),
+                projectSessionState.currentCameraState().zoomLevel().value(),
                 previewPlan.maxIterations(),
                 viewportWidth,
                 viewportHeight,
@@ -1261,21 +1115,16 @@ public final class StudioShellViewModel {
                 previewPlan.highPrecisionEnabled(),
                 captureMemoryPressure()
         );
-        deepZoomHealthLabel.set(deepZoomAdvisory.healthLabel());
-        deepZoomMemoryLabel.set(deepZoomAdvisory.memoryLabel());
+        inspectorState.applyDeepZoomAdvisory(deepZoomAdvisory);
         if (manual && deepZoomAdvisory.showDialog()) {
             pendingDeepZoomAdvisory.set(deepZoomAdvisory);
         }
-        previewCoordinator.request(currentProject, currentCameraState, previewPlan);
-    }
-
-    private String formatDouble(double value) {
-        return String.format("%.4f", value);
+        previewCoordinator.request(projectSessionState.currentProject(), projectSessionState.currentCameraState(), previewPlan);
     }
 
     private void rebuildBookmarkSidebarItems() {
         bookmarkSidebarItemsById.clear();
-        for (ProjectBookmark bookmark : currentProject.bookmarks()) {
+        for (ProjectBookmark bookmark : projectSessionState.currentProject().bookmarks()) {
             bookmarkSidebarItemsById.put(
                     bookmark.id().value(),
                     new BookmarkSidebarItem(bookmark.id().value(), bookmark.cameraState())
@@ -1283,80 +1132,26 @@ public final class StudioShellViewModel {
         }
     }
 
-    private int indexOfBookmark(String bookmarkId) {
-        for (int index = 0; index < currentProject.bookmarks().size(); index++) {
-            if (currentProject.bookmarks().get(index).id().value().equals(bookmarkId)) {
-                return index;
-            }
-        }
-        return -1;
-    }
-
-    private CameraState resolveInitialCameraState(Project project, boolean startupFraming) {
-        if (startupFraming) {
-            return defaultCameraFor(project);
-        }
-        if (project.timeline().keyframes().isEmpty()) {
-            return defaultCameraFor(project);
-        }
-        return project.timeline().keyframes().getLast().cameraState();
-    }
-
-    private CameraState defaultCameraFor(Project project) {
-        String formulaName = project.fractalFormula().name();
-        if ("Burning Ship".equals(formulaName)) {
-            return new CameraState(
-                    new FractalCoordinate(-0.45, -0.58),
-                    new ZoomLevel(1.35)
-            );
-        }
-        if ("Tricorn".equals(formulaName)) {
-            return new CameraState(
-                    new FractalCoordinate(0.0, 0.0),
-                    new ZoomLevel(1.15)
-            );
-        }
-        if ("Celtic Mandelbrot".equals(formulaName)) {
-            return new CameraState(
-                    new FractalCoordinate(-0.45, 0.0),
-                    new ZoomLevel(1.05)
-            );
-        }
-        return DEFAULT_CAMERA_STATE;
-    }
-
     private void resetPreviewSurface() {
         previewCoordinator.invalidate();
         previewImage.set(null);
-        previewModeLabel.set("Preview preciso 100%");
-        deepZoomHealthLabel.set("Estable");
-        deepZoomMemoryLabel.set(captureMemoryPressure().compactLabel());
+        inspectorState.resetPreviewState(captureMemoryPressure());
         viewportStatus.set("Listo para renderizar");
     }
 
     private void nudgeCamera(double horizontalStep, double verticalStep) {
-        double planeHeight = 3.0 / currentCameraState.zoomLevel().value();
+        double planeHeight = 3.0 / projectSessionState.currentCameraState().zoomLevel().value();
         double planeWidth = planeHeight * (viewportWidth / viewportHeight);
-        currentCameraState = currentCameraState.pan(planeWidth * horizontalStep, planeHeight * verticalStep);
+        projectSessionState.setCurrentCameraState(projectSessionState.currentCameraState().pan(
+                planeWidth * horizontalStep,
+                planeHeight * verticalStep
+        ));
         refreshCameraState();
         requestPreviewAfterInteraction();
     }
 
     private void jumpToBookmark(int direction) {
-        if (currentProject.bookmarks().isEmpty()) {
-            appendMetric("No hay puntos guardados");
-            return;
-        }
-        if (selectedBookmarkIndex < 0) {
-            selectedBookmarkIndex = direction > 0 ? 0 : currentProject.bookmarks().size() - 1;
-        } else {
-            selectedBookmarkIndex = Math.floorMod(selectedBookmarkIndex + direction, currentProject.bookmarks().size());
-        }
-        ProjectBookmark bookmark = currentProject.bookmarks().get(selectedBookmarkIndex);
-        currentCameraState = bookmark.cameraState();
-        refreshCameraState();
-        appendMetric("Punto cargado: " + bookmark.label());
-        requestAutoPreview();
+        applyFocusChange(pointsTimelineCoordinator.jumpToBookmark(direction));
     }
 
     private double clamp(double value, double min, double max) {
@@ -1382,33 +1177,12 @@ public final class StudioShellViewModel {
     }
 
     private void handleZoomLimitReached() {
-        viewportStatus.set("Limite de zoom alcanzado para " + currentProject.fractalFormula().name());
-        appendMetric("Limite de zoom alcanzado (" + ZoomLimitPolicy.maxZoomFor(currentProject.fractalFormula()) + ")");
-    }
-
-    private RenderJobStatusDto toRenderJobStatusDto(RenderJobRow row) {
-        return new RenderJobStatusDto(
-                row.jobId(),
-                row.jobName(),
-                com.marcos.fractalstudio.application.dto.RenderJobState.valueOf(row.state()),
-                row.completedFrames(),
-                row.totalFrames(),
-                row.progress(),
-                row.message(),
-                row.outputDirectory()
-        );
+        viewportStatus.set("Limite de zoom alcanzado para " + projectSessionState.currentProject().fractalFormula().name());
+        appendMetric("Limite de zoom alcanzado (" + ZoomLimitPolicy.maxZoomFor(projectSessionState.currentProject().fractalFormula()) + ")");
     }
 
     public void focusKeyframe(String keyframeId) {
-        currentProject.timeline().keyframes().stream()
-                .filter(keyframe -> keyframe.id().value().equals(keyframeId))
-                .findFirst()
-                .ifPresent(keyframe -> {
-                    currentCameraState = keyframe.cameraState();
-                    refreshCameraState();
-                    appendMetric("Keyframe cargado: " + keyframe.label());
-                    requestAutoPreview();
-                });
+        applyFocusChange(pointsTimelineCoordinator.focusKeyframe(keyframeId));
     }
 
     /**
@@ -1417,60 +1191,7 @@ public final class StudioShellViewModel {
      * @param bookmarkId bookmark identifier from the sidebar or navigation controls
      */
     public void focusBookmark(String bookmarkId) {
-        currentProject.bookmarks().stream()
-                .filter(bookmark -> bookmark.id().value().equals(bookmarkId))
-                .findFirst()
-                .ifPresent(bookmark -> {
-                    selectedBookmarkIndex = currentProject.bookmarks().indexOf(bookmark);
-                    currentCameraState = bookmark.cameraState();
-                    refreshCameraState();
-                    appendMetric("Punto cargado: " + bookmark.label());
-                    requestAutoPreview();
-                });
-    }
-
-    private String nextPointLabel() {
-        int nextIndex = Math.max(currentProject.bookmarks().size(), currentProject.timeline().keyframes().size()) + 1;
-        return "P-" + nextIndex;
-    }
-
-    private String findLinkedBookmarkIdForKeyframe(String keyframeId) {
-        return currentProject.timeline().keyframes().stream()
-                .filter(keyframe -> keyframe.id().value().equals(keyframeId))
-                .findFirst()
-                .flatMap(keyframe -> currentProject.bookmarks().stream()
-                        .filter(bookmark -> bookmark.label().equals(keyframe.label()))
-                        .filter(bookmark -> sameCameraState(bookmark.cameraState(), keyframe.cameraState()))
-                        .map(bookmark -> bookmark.id().value())
-                        .findFirst())
-                .orElse(null);
-    }
-
-    private String findLinkedKeyframeIdForBookmark(String bookmarkId) {
-        return currentProject.bookmarks().stream()
-                .filter(bookmark -> bookmark.id().value().equals(bookmarkId))
-                .findFirst()
-                .flatMap(bookmark -> currentProject.timeline().keyframes().stream()
-                        .filter(keyframe -> keyframe.label().equals(bookmark.label()))
-                        .filter(keyframe -> sameCameraState(bookmark.cameraState(), keyframe.cameraState()))
-                        .map(keyframe -> keyframe.id().value())
-                        .findFirst())
-                .orElse(null);
-    }
-
-    private boolean sameCameraState(CameraState left, CameraState right) {
-        return left.center().xDecimal().compareTo(right.center().xDecimal()) == 0
-                && left.center().yDecimal().compareTo(right.center().yDecimal()) == 0
-                && left.zoomLevel().valueDecimal().compareTo(right.zoomLevel().valueDecimal()) == 0;
-    }
-
-    private List<KeyframeTimelineItem> buildTimelineItems(List<KeyframeDto> keyframeDtos) {
-        List<com.marcos.fractalstudio.domain.timeline.Keyframe> domainKeyframes = currentProject.timeline().keyframes();
-        java.util.ArrayList<KeyframeTimelineItem> items = new java.util.ArrayList<>(keyframeDtos.size());
-        for (int index = 0; index < keyframeDtos.size() && index < domainKeyframes.size(); index++) {
-            items.add(new KeyframeTimelineItem(keyframeDtos.get(index), domainKeyframes.get(index).cameraState()));
-        }
-        return items;
+        applyFocusChange(pointsTimelineCoordinator.focusBookmark(bookmarkId));
     }
 
     private void regenerateTimelineThumbnails() {
@@ -1481,7 +1202,7 @@ public final class StudioShellViewModel {
         for (KeyframeTimelineItem timelineItem : timelineItems) {
             timelineItem.setThumbnail(null);
             timelineItem.setThumbnailStatus("Generando miniatura...");
-            renderFacade.generateKeyframeThumbnail(currentProject, timelineItem.cameraState())
+            renderFacade.generateKeyframeThumbnail(projectSessionState.currentProject(), timelineItem.cameraState())
                     .thenAccept(renderedFrame -> uiThreadExecutor.execute(() -> {
                         if (generation != thumbnailGeneration.get()) {
                             return;
@@ -1507,7 +1228,7 @@ public final class StudioShellViewModel {
         }
         for (BookmarkSidebarItem bookmarkItem : bookmarkSidebarItemsById.values()) {
             bookmarkItem.setThumbnail(null);
-            renderFacade.generateCameraThumbnail(currentProject, bookmarkItem.cameraState())
+            renderFacade.generateCameraThumbnail(projectSessionState.currentProject(), bookmarkItem.cameraState())
                     .thenAccept(renderedFrame -> uiThreadExecutor.execute(() -> {
                         if (generation != bookmarkThumbnailGeneration.get()) {
                             return;
@@ -1516,46 +1237,5 @@ public final class StudioShellViewModel {
                     }))
                     .exceptionally(throwable -> null);
         }
-    }
-
-    private Project synchronizePointsProject(Project project) {
-        if (!project.bookmarks().isEmpty()) {
-            return project.withTimeline(rebuildTimelineFromBookmarks(project.bookmarks(), project.settings().keyframeStepSeconds()));
-        }
-        if (!project.timeline().keyframes().isEmpty()) {
-            return project.withBookmarks(rebuildBookmarksFromTimeline(project.timeline().keyframes()));
-        }
-        return project;
-    }
-
-    private Timeline rebuildTimelineFromBookmarks(List<ProjectBookmark> bookmarks, double keyframeStepSeconds) {
-        java.util.ArrayList<Keyframe> keyframeList = new java.util.ArrayList<>(bookmarks.size());
-        for (int index = 0; index < bookmarks.size(); index++) {
-            ProjectBookmark bookmark = bookmarks.get(index);
-            keyframeList.add(new Keyframe(
-                    KeyframeId.create(),
-                    new TimePosition(index * keyframeStepSeconds),
-                    bookmark.cameraState(),
-                    bookmark.label()
-            ));
-        }
-        return new Timeline(keyframeList);
-    }
-
-    private List<ProjectBookmark> rebuildBookmarksFromTimeline(List<Keyframe> keyframeList) {
-        java.util.ArrayList<ProjectBookmark> bookmarks = new java.util.ArrayList<>(keyframeList.size());
-        for (Keyframe keyframe : keyframeList) {
-            bookmarks.add(new ProjectBookmark(
-                    ProjectBookmarkId.create(),
-                    keyframe.label(),
-                    keyframe.cameraState()
-            ));
-        }
-        return bookmarks;
-    }
-
-    public enum WorkspaceDrawerTab {
-        POINTS,
-        RENDER_QUEUE
     }
 }

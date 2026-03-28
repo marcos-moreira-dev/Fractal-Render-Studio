@@ -66,7 +66,7 @@ Ese JSON contiene el proyecto completo para volver a abrirlo en la aplicacion.
 
 La aplicacion arranca desde:
 
-- [FractalStudioApplication.java](src/main/java/com/marcos/fractalstudio/presentation/app/FractalStudioApplication.java)
+- [FractalStudioApplication.java](src/main/java/com/marcos/fractalstudio/FractalStudioApplication.java)
 
 ## Ejecutar en desarrollo
 
