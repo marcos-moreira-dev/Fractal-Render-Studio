@@ -117,7 +117,7 @@ public final class StudioSplashScreen {
         loadingRow.setPadding(new Insets(2.0, 16.0, 0.0, 16.0));
 
         Region spacer = new Region();
-        spacer.setPrefHeight(50.0);
+        spacer.setPrefHeight(100.0);
 
         VBox root = new VBox(14.0, wordmarkView, subtitle, spacer, loadingRow);
         root.setAlignment(Pos.CENTER);
