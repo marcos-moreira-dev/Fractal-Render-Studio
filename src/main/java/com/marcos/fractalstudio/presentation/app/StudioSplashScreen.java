@@ -3,9 +3,12 @@ package com.marcos.fractalstudio.presentation.app;
 import javafx.animation.PauseTransition;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.geometry.Rectangle2D;
 import javafx.scene.Scene;
+import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.Label;
 import javafx.scene.control.ProgressIndicator;
+import javafx.scene.layout.HBox;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.Region;
@@ -28,8 +31,9 @@ import javafx.util.Duration;
 public final class StudioSplashScreen {
 
     private static final Duration MINIMUM_VISIBLE_DURATION = Duration.seconds(5);
-    private static final double SPLASH_WIDTH = 520.0;
-    private static final double SPLASH_HEIGHT = 250.0;
+    private static final double SPLASH_WIDTH = 560.0;
+    private static final double SPLASH_HEIGHT = 320.0;
+    private static final Rectangle2D WORDMARK_VIEWPORT = new Rectangle2D(90.0, 40.0, 1360.0, 620.0);
 
     private final Stage stage = new Stage(StageStyle.TRANSPARENT);
     private final long shownAtNanos;
@@ -73,8 +77,10 @@ public final class StudioSplashScreen {
         ImageView wordmarkView = new ImageView(new Image(
                 StudioSplashScreen.class.getResourceAsStream("/assets/images/app-wordmark.png")
         ));
+        wordmarkView.setViewport(WORDMARK_VIEWPORT);
         wordmarkView.setPreserveRatio(true);
-        wordmarkView.setFitWidth(420.0);
+        wordmarkView.setFitWidth(445.0);
+        wordmarkView.setFitHeight(180.0);
         wordmarkView.setSmooth(true);
 
         Label subtitle = new Label("Inicializando explorador fractal y pipeline de render");
@@ -84,20 +90,38 @@ public final class StudioSplashScreen {
                 -fx-font-weight: 500;
                 -fx-opacity: 0.92;
                 """);
+        subtitle.setWrapText(true);
+        subtitle.setAlignment(Pos.CENTER);
+        subtitle.setMaxWidth(420.0);
 
         ProgressIndicator progressIndicator = new ProgressIndicator();
         progressIndicator.setProgress(-1.0);
-        progressIndicator.setPrefSize(34.0, 34.0);
+        progressIndicator.setPrefSize(56.0, 56.0);
+        progressIndicator.setMinSize(56.0, 56.0);
+        progressIndicator.setMaxSize(56.0, 56.0);
         progressIndicator.setStyle("""
                 -fx-progress-color: #4DA8FF;
+                -fx-opacity: 1.0;
                 """);
 
-        Region separator = new Region();
-        separator.setPrefHeight(4.0);
+        Label loadingLabel = new Label("Cargando interfaz y servicios...");
+        loadingLabel.setContentDisplay(ContentDisplay.RIGHT);
+        loadingLabel.setStyle("""
+                -fx-text-fill: #F6FAFF;
+                -fx-font-size: 14px;
+                -fx-font-weight: 600;
+                """);
 
-        VBox root = new VBox(18.0, wordmarkView, subtitle, separator, progressIndicator);
+        HBox loadingRow = new HBox(14.0, progressIndicator, loadingLabel);
+        loadingRow.setAlignment(Pos.CENTER);
+        loadingRow.setPadding(new Insets(2.0, 16.0, 0.0, 16.0));
+
+        Region spacer = new Region();
+        spacer.setPrefHeight(50.0);
+
+        VBox root = new VBox(14.0, wordmarkView, subtitle, spacer, loadingRow);
         root.setAlignment(Pos.CENTER);
-        root.setPadding(new Insets(34.0, 42.0, 34.0, 42.0));
+        root.setPadding(new Insets(24.0, 34.0, 28.0, 34.0));
         root.setStyle("""
                 -fx-background-color: linear-gradient(to bottom right, rgba(8,16,30,0.97), rgba(17,29,52,0.95));
                 -fx-background-radius: 24;
